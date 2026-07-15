@@ -1349,6 +1349,10 @@ export async function revealPathInFileManager(path: string): Promise<void> {
   return invoke("reveal_path_in_file_manager", { path });
 }
 
+export async function deleteDatabaseBackupFiles(paths: string[]): Promise<number> {
+  return invoke("delete_database_backup_files", { paths });
+}
+
 export async function isSqliteDatabaseFile(path: string): Promise<boolean> {
   return invoke("is_sqlite_database_file", { path });
 }
