@@ -526,6 +526,10 @@ export async function revealPathInFileManager(_path: string): Promise<void> {
   throw new Error("Reveal in file manager is only available in the desktop app.");
 }
 
+export async function deleteDatabaseBackupFiles(_paths: string[]): Promise<number> {
+  throw new Error("Database backup file management is only available in the desktop app.");
+}
+
 export async function isSqliteDatabaseFile(_path: string): Promise<boolean> {
   return false;
 }
