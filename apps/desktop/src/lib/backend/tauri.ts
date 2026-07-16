@@ -2265,7 +2265,14 @@ export interface DatabaseExportRequest {
   includeData: boolean;
   includeObjects: boolean;
   dropTableIfExists?: boolean;
+  failOnError?: boolean;
+  snapshotSessionId?: string;
   batchSize: number;
+}
+
+export interface DatabaseBackupSnapshot {
+  sessionId: string;
+  schemas: string[];
 }
 
 export interface ExportProgress {
@@ -2431,6 +2438,10 @@ export async function startQueryResultExport(request: QueryResultExportRequest, 
 
 export async function cancelQueryResultExport(exportId: string, executionId?: string): Promise<void> {
   return invoke("cancel_query_result_export", { exportId, executionId: executionId || null });
+}
+
+export async function beginDatabaseBackupSnapshot(connectionId: string, database: string): Promise<DatabaseBackupSnapshot> {
+  return invoke("begin_database_backup_snapshot", { connectionId, database });
 }
 
 export async function exportDatabaseSql(request: DatabaseExportRequest, onProgress: (progress: ExportProgress) => void): Promise<void> {

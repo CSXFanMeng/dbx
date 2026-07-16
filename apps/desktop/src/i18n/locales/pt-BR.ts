@@ -4012,7 +4012,7 @@ export default withEnglishFallback({
     scheduleCreated: "Plano de backup criado",
     scheduleUpdated: "Plano de backup atualizado",
     deleteSchedule: "Excluir plano",
-    deleteScheduleConfirm: "Tem certeza de que deseja excluir o plano \"{name}\"? Os arquivos de backup existentes ainda serão mantidos no histórico.",
+    deleteScheduleConfirm: 'Tem certeza de que deseja excluir o plano "{name}"? Os arquivos de backup existentes ainda serão mantidos no histórico.',
     cannotDeleteRunningSchedule: "Um plano de backup em execução não pode ser excluído",
     history: "Histórico de backup",
     noHistory: "Nenhum histórico de backup",

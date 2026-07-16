@@ -321,6 +321,7 @@ export const importTableFile = forward("importTableFile");
 export const cancelTableImport = forward("cancelTableImport");
 
 // Database Export
+export const beginDatabaseBackupSnapshot = forward("beginDatabaseBackupSnapshot");
 export const exportDatabaseSql = forward("exportDatabaseSql");
 export const cancelDatabaseExport = forward("cancelDatabaseExport");
 export const exportQueryResultCsv = forward("exportQueryResultCsv");

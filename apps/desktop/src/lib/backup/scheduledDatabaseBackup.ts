@@ -9,6 +9,23 @@ export type DatabaseBackupFrequency = "hourly" | "daily" | "weekly";
 export type DatabaseBackupRunStatus = "running" | "success" | "failed" | "cancelled";
 export type DatabaseBackupRunTrigger = "manual" | "scheduled";
 
+const CONSISTENT_BACKUP_DATABASE_TYPES = new Set(["mysql", "postgres"]);
+
+export function supportsScheduledDatabaseBackup(databaseType: string | undefined): boolean {
+  return !!databaseType && CONSISTENT_BACKUP_DATABASE_TYPES.has(databaseType);
+}
+
+export function resolveScheduledDatabaseBackupTargets(configuredDatabases: readonly string[], availableDatabases: readonly string[]): string[] {
+  const available = [...new Set(availableDatabases.map((database) => database.trim()).filter(Boolean))];
+  if (configuredDatabases.length === 0) return available;
+
+  const missing = configuredDatabases.filter((database) => !available.includes(database));
+  if (missing.length > 0) {
+    throw new Error(`Configured backup databases are unavailable: ${missing.join(", ")}`);
+  }
+  return [...configuredDatabases];
+}
+
 export interface DatabaseBackupSchedule {
   id: string;
   name: string;

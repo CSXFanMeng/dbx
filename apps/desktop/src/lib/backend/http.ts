@@ -86,6 +86,7 @@ import type {
   TableImportRequest,
   TableImportSummary,
   TableImportProgress,
+  DatabaseBackupSnapshot,
   DatabaseExportRequest,
   ExportProgress,
   TableExportRequest,
@@ -1544,6 +1545,10 @@ export async function cancelTableImport(importId: string): Promise<boolean> {
 // ---------------------------------------------------------------------------
 // Database Export
 // ---------------------------------------------------------------------------
+
+export async function beginDatabaseBackupSnapshot(_connectionId: string, _database: string): Promise<DatabaseBackupSnapshot> {
+  throw new Error("Consistent database backup snapshots are only available in the desktop app.");
+}
 
 export async function exportDatabaseSql(request: DatabaseExportRequest, onProgress: (progress: ExportProgress) => void): Promise<void> {
   // 1. POST to start the export

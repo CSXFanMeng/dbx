@@ -1409,6 +1409,7 @@ pub fn run() {
             commands::transfer::start_transfer,
             commands::transfer::preview_transfer_ownership,
             commands::transfer::cancel_transfer,
+            commands::database_export::begin_database_backup_snapshot,
             commands::database_export::export_database_sql,
             commands::database_export::cancel_database_export,
             commands::table_export::start_table_export,

@@ -4010,7 +4010,7 @@ export default withEnglishFallback({
     scheduleCreated: "Pianificazione di backup creata",
     scheduleUpdated: "Pianificazione di backup aggiornata",
     deleteSchedule: "Elimina pianificazione",
-    deleteScheduleConfirm: "Eliminare la pianificazione \"{name}\"? I file di backup esistenti rimarranno nella cronologia.",
+    deleteScheduleConfirm: 'Eliminare la pianificazione "{name}"? I file di backup esistenti rimarranno nella cronologia.',
     cannotDeleteRunningSchedule: "Impossibile eliminare una pianificazione di backup in esecuzione",
     history: "Cronologia backup",
     noHistory: "Nessun record di backup",

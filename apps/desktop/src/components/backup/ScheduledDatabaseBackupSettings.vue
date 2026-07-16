@@ -10,11 +10,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { ChevronDown, ChevronRight, DatabaseBackup, FolderOpen, Loader2, Pencil, Play, Plus, RotateCcw, Square, Trash2 } from "@lucide/vue";
 import * as api from "@/lib/backend/api";
-import { databaseOptionsForConnection } from "@/composables/useDatabaseOptions";
-import { useScheduledDatabaseBackups, supportsScheduledDatabaseBackup } from "@/composables/useScheduledDatabaseBackups";
+import { useScheduledDatabaseBackups } from "@/composables/useScheduledDatabaseBackups";
 import { useToast } from "@/composables/useToast";
 import { generateDatabaseExportId } from "@/lib/export/databaseExport";
-import { nextDatabaseBackupRunAt, type DatabaseBackupFile, type DatabaseBackupRun, type DatabaseBackupSchedule } from "@/lib/backup/scheduledDatabaseBackup";
+import { nextDatabaseBackupRunAt, supportsScheduledDatabaseBackup, type DatabaseBackupFile, type DatabaseBackupRun, type DatabaseBackupSchedule } from "@/lib/backup/scheduledDatabaseBackup";
 import { useConnectionStore } from "@/stores/connectionStore";
 
 const { t, locale } = useI18n();
@@ -126,15 +125,9 @@ async function loadDatabases(connectionId: string, preserveSelection: boolean) {
   loadingDatabases.value = true;
   try {
     await connectionStore.ensureConnected(connectionId);
-    const config = connectionStore.getConfig(connectionId);
-    const names = databaseOptionsForConnection(
-      (await api.listDatabases(connectionId)).map((database) => database.name),
-      config,
-    );
+    const names = (await api.listDatabases(connectionId)).map((database) => database.name);
     databaseOptions.value = names;
-    if (preserveSelection) {
-      selectedDatabases.value = selectedDatabases.value.filter((database) => names.includes(database));
-    } else {
+    if (!preserveSelection) {
       selectedDatabases.value = [];
       allDatabases.value = true;
     }

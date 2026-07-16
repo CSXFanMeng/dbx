@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { databaseBackupFilePath, databaseBackupRunsToPrune, databaseBackupScheduleIsDue, nextDatabaseBackupRunAt, normalizeDatabaseBackupSchedule, type DatabaseBackupRun, type DatabaseBackupSchedule } from "../../apps/desktop/src/lib/backup/scheduledDatabaseBackup.ts";
+import { databaseBackupFilePath, databaseBackupRunsToPrune, databaseBackupScheduleIsDue, nextDatabaseBackupRunAt, normalizeDatabaseBackupSchedule, resolveScheduledDatabaseBackupTargets, supportsScheduledDatabaseBackup, type DatabaseBackupRun, type DatabaseBackupSchedule } from "../../apps/desktop/src/lib/backup/scheduledDatabaseBackup.ts";
 
 function schedule(overrides: Partial<DatabaseBackupSchedule> = {}): DatabaseBackupSchedule {
   return {
@@ -95,6 +95,31 @@ test("retention pruning keeps the newest successful runs", () => {
 
   assert.deepEqual(
     databaseBackupRunsToPrune(runs, "schedule-1", 2).map((item) => item.id),
+    ["old"],
+  );
+});
+
+test("all-database backups use the complete database list", () => {
+  assert.deepEqual(resolveScheduledDatabaseBackupTargets([], ["visible", "hidden"]), ["visible", "hidden"]);
+});
+
+test("explicit backup databases fail when any configured target is missing", () => {
+  assert.throws(() => resolveScheduledDatabaseBackupTargets(["app", "renamed"], ["app"]), /renamed/);
+});
+
+test("scheduled backups are limited to databases with consistent snapshot support", () => {
+  assert.equal(supportsScheduledDatabaseBackup("postgres"), true);
+  assert.equal(supportsScheduledDatabaseBackup("mysql"), true);
+  assert.equal(supportsScheduledDatabaseBackup("sqlite"), false);
+  assert.equal(supportsScheduledDatabaseBackup("sqlserver"), false);
+});
+
+test("retention never selects failed backup runs", () => {
+  const failed = { ...run("failed", "2026-07-16T04:00:00.000Z"), status: "failed" as const };
+  const successful = [run("new", "2026-07-16T03:00:00.000Z"), run("old", "2026-07-16T01:00:00.000Z")];
+
+  assert.deepEqual(
+    databaseBackupRunsToPrune([failed, ...successful], "schedule-1", 1).map((item) => item.id),
     ["old"],
   );
 });
