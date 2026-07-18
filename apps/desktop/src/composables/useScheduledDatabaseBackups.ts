@@ -15,6 +15,7 @@ import {
   normalizeDatabaseBackupSchedule,
   readDatabaseBackupRuns,
   readDatabaseBackupSchedules,
+  resolveScheduledDatabaseBackupTableScope,
   resolveScheduledDatabaseBackupTargets,
   supportsScheduledDatabaseBackup,
   writeDatabaseBackupRuns,
@@ -178,11 +179,12 @@ export function useScheduledDatabaseBackups(options: { scheduler?: boolean } = {
       if (!connection || !supportsScheduledDatabaseBackup(connection.db_type)) throw new Error("The backup connection is unavailable or unsupported.");
       await connectionStore.ensureConnected(schedule.connectionId);
       const availableDatabases = (await api.listDatabases(schedule.connectionId)).map((database) => database.name);
-      const selectedDatabases = resolveScheduledDatabaseBackupTargets(schedule.databases, availableDatabases);
+      const selectedDatabases = resolveScheduledDatabaseBackupTargets(schedule.databases, availableDatabases, connection.db_type);
       if (selectedDatabases.length === 0) throw new Error("No databases are available for this backup schedule.");
 
       let exportIndex = 0;
-      let totalExports = selectedDatabases.length;
+      let totalExports = 0;
+      let includedTableCount = 0;
       for (const database of selectedDatabases) {
         if (cancellationRequested.has(runId)) {
           finalStatus = "cancelled";
@@ -197,9 +199,21 @@ export function useScheduledDatabaseBackups(options: { scheduler?: boolean } = {
             schemasByDatabase: { [database]: snapshot.schemas },
           });
           if (databasePlan.length === 0) throw new Error(`Database ${database} did not resolve to any schemas.`);
-          totalExports += databasePlan.length - 1;
-
+          const scopedDatabasePlan: Array<(typeof databasePlan)[number] & { selectedTables?: string[]; excludedTables?: string[] }> = [];
           for (const item of databasePlan) {
+            if (schedule.tableFilterMode === "all") {
+              scopedDatabasePlan.push(item);
+              continue;
+            }
+            const availableTables = (await api.listTables(schedule.connectionId, item.database, item.schema)).map((table) => table.name);
+            const scope = resolveScheduledDatabaseBackupTableScope(schedule.tableFilterMode, schedule.tablePatterns, availableTables, item.database, item.schema);
+            includedTableCount += scope.includedTables.length;
+            if (scope.includedTables.length === 0) continue;
+            scopedDatabasePlan.push({ ...item, selectedTables: scope.selectedTables, excludedTables: scope.excludedTables });
+          }
+          totalExports += scopedDatabasePlan.length;
+
+          for (const item of scopedDatabasePlan) {
             if (cancellationRequested.has(runId)) {
               finalStatus = "cancelled";
               break;
@@ -216,6 +230,8 @@ export function useScheduledDatabaseBackups(options: { scheduler?: boolean } = {
                 database: item.database,
                 schema: item.schema,
                 filePath,
+                selectedTables: item.selectedTables,
+                excludedTables: item.excludedTables,
                 includeStructure: schedule.includeStructure,
                 includeData: schedule.includeData,
                 includeObjects: schedule.includeObjects,
@@ -256,6 +272,9 @@ export function useScheduledDatabaseBackups(options: { scheduler?: boolean } = {
           });
         }
         if (finalStatus !== "success") break;
+      }
+      if (schedule.tableFilterMode !== "all" && includedTableCount === 0) {
+        throw new Error(`No tables matched the configured ${schedule.tableFilterMode} backup rules.`);
       }
     } catch (error: any) {
       finalStatus = cancellationRequested.has(runId) ? "cancelled" : "failed";

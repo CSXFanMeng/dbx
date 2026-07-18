@@ -13,7 +13,8 @@ import * as api from "@/lib/backend/api";
 import { useScheduledDatabaseBackups } from "@/composables/useScheduledDatabaseBackups";
 import { useToast } from "@/composables/useToast";
 import { generateDatabaseExportId } from "@/lib/export/databaseExport";
-import { nextDatabaseBackupRunAt, supportsScheduledDatabaseBackup, type DatabaseBackupFile, type DatabaseBackupRun, type DatabaseBackupSchedule } from "@/lib/backup/scheduledDatabaseBackup";
+import { nextDatabaseBackupRunAt, normalizeDatabaseBackupTablePatterns, supportsScheduledDatabaseBackup, type DatabaseBackupFile, type DatabaseBackupRun, type DatabaseBackupSchedule } from "@/lib/backup/scheduledDatabaseBackup";
+import { filterDatabaseNamesForVisiblePicker } from "@/lib/database/visibleDatabases";
 import { useConnectionStore } from "@/stores/connectionStore";
 
 const { t, locale } = useI18n();
@@ -32,6 +33,7 @@ const saving = ref(false);
 const databaseOptions = ref<string[]>([]);
 const allDatabases = ref(true);
 const selectedDatabases = ref<string[]>([]);
+const tablePatternsInput = ref("");
 const expandedRunIds = reactive(new Set<string>());
 
 const sqlConnections = computed(() => connectionStore.connections.filter((connection) => supportsScheduledDatabaseBackup(connection.db_type)));
@@ -54,6 +56,8 @@ function newScheduleDraft(connectionId = sqlConnections.value[0]?.id ?? ""): Dat
     enabled: true,
     connectionId,
     databases: [],
+    tableFilterMode: "all",
+    tablePatterns: [],
     destinationDirectory: "",
     frequency: "daily",
     intervalHours: 6,
@@ -76,7 +80,8 @@ const draft = ref<DatabaseBackupSchedule>(newScheduleDraft());
 const canSave = computed(() => {
   const hasContent = draft.value.includeStructure || draft.value.includeData || draft.value.includeObjects;
   const hasDatabaseScope = allDatabases.value || selectedDatabases.value.length > 0;
-  return !!draft.value.name.trim() && !!draft.value.connectionId && !!draft.value.destinationDirectory.trim() && hasContent && hasDatabaseScope && !saving.value && !loadingDatabases.value;
+  const hasTableScope = draft.value.tableFilterMode === "all" || normalizeDatabaseBackupTablePatterns(tablePatternsInput.value).length > 0;
+  return !!draft.value.name.trim() && !!draft.value.connectionId && !!draft.value.destinationDirectory.trim() && hasContent && hasDatabaseScope && hasTableScope && !saving.value && !loadingDatabases.value;
 });
 const nextRunPreview = computed(() => nextDatabaseBackupRunAt(draft.value, new Date()));
 
@@ -104,6 +109,12 @@ function databaseScopeLabel(schedule: DatabaseBackupSchedule): string {
   return t("databaseBackup.databaseCount", { count: schedule.databases.length });
 }
 
+function tableScopeLabel(schedule: DatabaseBackupSchedule): string {
+  if (schedule.tableFilterMode === "include") return t("databaseBackup.includedTablePatterns", { count: schedule.tablePatterns.length });
+  if (schedule.tableFilterMode === "exclude") return t("databaseBackup.excludedTablePatterns", { count: schedule.tablePatterns.length });
+  return "";
+}
+
 function runStatusLabel(status: DatabaseBackupRun["status"]): string {
   return t(`databaseBackup.status.${status}`);
 }
@@ -125,11 +136,15 @@ async function loadDatabases(connectionId: string, preserveSelection: boolean) {
   loadingDatabases.value = true;
   try {
     await connectionStore.ensureConnected(connectionId);
+    const connection = connectionStore.getConfig(connectionId);
     const names = (await api.listDatabases(connectionId)).map((database) => database.name);
-    databaseOptions.value = names;
+    databaseOptions.value = filterDatabaseNamesForVisiblePicker(names, connection);
     if (!preserveSelection) {
       selectedDatabases.value = [];
       allDatabases.value = true;
+      draft.value.tableFilterMode = "all";
+      draft.value.tablePatterns = [];
+      tablePatternsInput.value = "";
     }
   } catch (error: any) {
     toast(error?.message || String(error), 5000);
@@ -143,15 +158,17 @@ async function openCreateSchedule() {
   draft.value = newScheduleDraft();
   allDatabases.value = true;
   selectedDatabases.value = [];
+  tablePatternsInput.value = "";
   scheduleDialogOpen.value = true;
   await loadDatabases(draft.value.connectionId, false);
 }
 
 async function openEditSchedule(schedule: DatabaseBackupSchedule) {
   editingScheduleId.value = schedule.id;
-  draft.value = { ...schedule, databases: [...schedule.databases] };
+  draft.value = { ...schedule, databases: [...schedule.databases], tablePatterns: [...schedule.tablePatterns] };
   allDatabases.value = schedule.databases.length === 0;
   selectedDatabases.value = [...schedule.databases];
+  tablePatternsInput.value = schedule.tablePatterns.join(", ");
   scheduleDialogOpen.value = true;
   await loadDatabases(schedule.connectionId, true);
 }
@@ -181,6 +198,7 @@ async function submitSchedule() {
     saveSchedule({
       ...draft.value,
       databases: allDatabases.value ? [] : [...selectedDatabases.value],
+      tablePatterns: draft.value.tableFilterMode === "all" ? [] : normalizeDatabaseBackupTablePatterns(tablePatternsInput.value),
     });
     scheduleDialogOpen.value = false;
     toast(t(editingScheduleId.value ? "databaseBackup.scheduleUpdated" : "databaseBackup.scheduleCreated"), 2500);
@@ -286,6 +304,7 @@ function restoreBackup(run: DatabaseBackupRun, file: DatabaseBackupFile) {
           <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <span>{{ frequencyLabel(schedule) }}</span>
             <span>{{ databaseScopeLabel(schedule) }}</span>
+            <span v-if="schedule.tableFilterMode !== 'all'">{{ tableScopeLabel(schedule) }}</span>
             <span>{{ t("databaseBackup.nextRun", { time: formatDate(schedule.nextRunAt) }) }}</span>
             <span>{{ t("databaseBackup.keepRuns", { count: schedule.retentionCount }) }}</span>
           </div>
@@ -411,6 +430,27 @@ function restoreBackup(run: DatabaseBackupRun, file: DatabaseBackupFile) {
               <span class="truncate">{{ database }}</span>
             </label>
           </div>
+        </div>
+
+        <div class="space-y-3">
+          <div class="grid gap-4 sm:grid-cols-[minmax(0,200px)_minmax(0,1fr)]">
+            <div class="space-y-2">
+              <Label>{{ t("databaseBackup.tableScope") }}</Label>
+              <Select v-model="draft.tableFilterMode">
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">{{ t("databaseBackup.allTables") }}</SelectItem>
+                  <SelectItem value="include">{{ t("databaseBackup.includeTables") }}</SelectItem>
+                  <SelectItem value="exclude">{{ t("databaseBackup.excludeTables") }}</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div v-if="draft.tableFilterMode !== 'all'" class="space-y-2">
+              <Label>{{ t("databaseBackup.tablePatterns") }}</Label>
+              <Input v-model="tablePatternsInput" :placeholder="t('databaseBackup.tablePatternsPlaceholder')" />
+            </div>
+          </div>
+          <p v-if="draft.tableFilterMode !== 'all'" class="text-xs text-muted-foreground">{{ t("databaseBackup.tablePatternsHint") }}</p>
         </div>
 
         <div class="grid gap-4 sm:grid-cols-3">
