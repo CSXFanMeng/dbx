@@ -14,7 +14,6 @@ import { useScheduledDatabaseBackups } from "@/composables/useScheduledDatabaseB
 import { useToast } from "@/composables/useToast";
 import { generateDatabaseExportId } from "@/lib/export/databaseExport";
 import { nextDatabaseBackupRunAt, normalizeDatabaseBackupTablePatterns, supportsScheduledDatabaseBackup, type DatabaseBackupFile, type DatabaseBackupRun, type DatabaseBackupSchedule } from "@/lib/backup/scheduledDatabaseBackup";
-import { filterDatabaseNamesForVisiblePicker } from "@/lib/database/visibleDatabases";
 import { useConnectionStore } from "@/stores/connectionStore";
 
 const { t, locale } = useI18n();
@@ -136,9 +135,8 @@ async function loadDatabases(connectionId: string, preserveSelection: boolean) {
   loadingDatabases.value = true;
   try {
     await connectionStore.ensureConnected(connectionId);
-    const connection = connectionStore.getConfig(connectionId);
     const names = (await api.listDatabases(connectionId)).map((database) => database.name);
-    databaseOptions.value = filterDatabaseNamesForVisiblePicker(names, connection);
+    databaseOptions.value = names;
     if (!preserveSelection) {
       selectedDatabases.value = [];
       allDatabases.value = true;

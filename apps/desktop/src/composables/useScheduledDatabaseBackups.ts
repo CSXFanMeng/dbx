@@ -11,6 +11,7 @@ import {
   databaseBackupFilePath,
   databaseBackupRunsToPrune,
   databaseBackupScheduleIsDue,
+  databaseBackupTableNamesAreCaseSensitive,
   nextDatabaseBackupRunAt,
   normalizeDatabaseBackupSchedule,
   readDatabaseBackupRuns,
@@ -182,6 +183,16 @@ export function useScheduledDatabaseBackups(options: { scheduler?: boolean } = {
       const selectedDatabases = resolveScheduledDatabaseBackupTargets(schedule.databases, availableDatabases, connection.db_type);
       if (selectedDatabases.length === 0) throw new Error("No databases are available for this backup schedule.");
 
+      let tableNamesCaseSensitive = true;
+      if (connection.db_type === "mysql" && schedule.tableFilterMode !== "all") {
+        try {
+          const result = await api.executeQuery(schedule.connectionId, "", "SHOW VARIABLES LIKE 'lower_case_table_names'", undefined, undefined, { maxRows: 1 });
+          tableNamesCaseSensitive = databaseBackupTableNamesAreCaseSensitive(connection.db_type, result.rows[0]?.[1] ?? result.rows[0]?.[0]);
+        } catch (error) {
+          appendDebugLog("warn", "[DBX][database-backup:table-name-case-detection-error]", error);
+        }
+      }
+
       let exportIndex = 0;
       let totalExports = 0;
       let includedTableCount = 0;
@@ -206,7 +217,7 @@ export function useScheduledDatabaseBackups(options: { scheduler?: boolean } = {
               continue;
             }
             const availableTables = (await api.listTables(schedule.connectionId, item.database, item.schema)).map((table) => table.name);
-            const scope = resolveScheduledDatabaseBackupTableScope(schedule.tableFilterMode, schedule.tablePatterns, availableTables, item.database, item.schema);
+            const scope = resolveScheduledDatabaseBackupTableScope(schedule.tableFilterMode, schedule.tablePatterns, availableTables, item.database, item.schema, tableNamesCaseSensitive);
             includedTableCount += scope.includedTables.length;
             if (scope.includedTables.length === 0) continue;
             scopedDatabasePlan.push({ ...item, selectedTables: scope.selectedTables, excludedTables: scope.excludedTables });

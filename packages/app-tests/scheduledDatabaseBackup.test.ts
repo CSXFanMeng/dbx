@@ -4,6 +4,7 @@ import {
   databaseBackupFilePath,
   databaseBackupRunsToPrune,
   databaseBackupScheduleIsDue,
+  databaseBackupTableNamesAreCaseSensitive,
   nextDatabaseBackupRunAt,
   normalizeDatabaseBackupSchedule,
   normalizeDatabaseBackupTablePatterns,
@@ -140,8 +141,8 @@ test("all-database PostgreSQL backups exclude template databases", () => {
   assert.deepEqual(resolveScheduledDatabaseBackupTargets([], ["template0", "postgres", "template1", "app"], "postgres"), ["postgres", "app"]);
 });
 
-test("explicit system database targets are rejected", () => {
-  assert.throws(() => resolveScheduledDatabaseBackupTargets(["information_schema"], ["information_schema", "app"], "mysql"), /information_schema/);
+test("explicit system database targets remain available", () => {
+  assert.deepEqual(resolveScheduledDatabaseBackupTargets(["mysql"], ["mysql", "app"], "mysql"), ["mysql"]);
 });
 
 test("explicit backup databases fail when any configured target is missing", () => {
@@ -170,6 +171,26 @@ test("exclude table rules preserve all non-matching tables", () => {
   assert.deepEqual(excluded, {
     includedTables: ["users", "sessions"],
     excludedTables: ["audit_log"],
+  });
+});
+
+test("MySQL table rules respect lower_case_table_names", () => {
+  assert.equal(databaseBackupTableNamesAreCaseSensitive("mysql", 0), true);
+  assert.equal(databaseBackupTableNamesAreCaseSensitive("mysql", "1"), false);
+  assert.equal(databaseBackupTableNamesAreCaseSensitive("mysql", 2), false);
+  assert.equal(databaseBackupTableNamesAreCaseSensitive("postgres", 1), true);
+  assert.equal(databaseBackupTableNamesAreCaseSensitive("mysql", undefined), true);
+
+  const caseSensitive = resolveScheduledDatabaseBackupTableScope("exclude", ["orders"], ["orders", "Orders"], "app", "app", true);
+  assert.deepEqual(caseSensitive, {
+    includedTables: ["Orders"],
+    excludedTables: ["orders"],
+  });
+
+  const caseInsensitive = resolveScheduledDatabaseBackupTableScope("exclude", ["orders"], ["orders", "Orders"], "app", "app", false);
+  assert.deepEqual(caseInsensitive, {
+    includedTables: [],
+    excludedTables: ["orders", "Orders"],
   });
 });
 
