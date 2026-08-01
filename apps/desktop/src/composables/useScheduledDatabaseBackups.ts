@@ -9,6 +9,7 @@ import {
   DATABASE_BACKUP_RUNS_STORAGE_KEY,
   DATABASE_BACKUP_SCHEDULES_STORAGE_KEY,
   databaseBackupFilePath,
+  databaseBackupProgressPercent,
   databaseBackupRunsToPrune,
   databaseBackupScheduleIsDue,
   databaseBackupTableNamesAreCaseSensitive,
@@ -55,16 +56,16 @@ function persistRuns() {
   writeDatabaseBackupRuns(runs.value);
 }
 
-function replaceRun(run: DatabaseBackupRun) {
+function replaceRun(run: DatabaseBackupRun, persist = true) {
   runs.value = [run, ...runs.value.filter((existing) => existing.id !== run.id)];
-  persistRuns();
+  if (persist) persistRuns();
 }
 
-function updateRun(runId: string, patch: Partial<DatabaseBackupRun>): DatabaseBackupRun | null {
+function updateRun(runId: string, patch: Partial<DatabaseBackupRun>, persist = true): DatabaseBackupRun | null {
   const existing = runs.value.find((run) => run.id === runId);
   if (!existing) return null;
   const updated = { ...existing, ...patch };
-  replaceRun(updated);
+  replaceRun(updated, persist);
   return updated;
 }
 
@@ -125,6 +126,14 @@ export function useScheduledDatabaseBackups(options: { scheduler?: boolean } = {
     persistRuns();
   }
 
+  function renameRun(runId: string, displayName: string): boolean {
+    const run = runs.value.find((item) => item.id === runId);
+    if (!run || activeRunIds.has(runId)) return false;
+    const normalizedName = displayName.trim();
+    updateRun(runId, { displayName: normalizedName && normalizedName !== run.scheduleName ? normalizedName : undefined });
+    return true;
+  }
+
   async function pruneScheduleRuns(schedule: DatabaseBackupSchedule) {
     const staleRuns = databaseBackupRunsToPrune(runs.value, schedule.id, schedule.retentionCount);
     if (staleRuns.length === 0) return;
@@ -164,6 +173,7 @@ export function useScheduledDatabaseBackups(options: { scheduler?: boolean } = {
       status: "running",
       startedAt: startedAt.toISOString(),
       files: [],
+      progressPercent: 0,
     };
     replaceRun(run);
     activeScheduleIds.add(schedule.id);
@@ -175,6 +185,7 @@ export function useScheduledDatabaseBackups(options: { scheduler?: boolean } = {
     let finalStatus: Exclude<DatabaseBackupRunStatus, "running"> = "success";
     let finalError = "";
     let finishedRun: DatabaseBackupRun | null = null;
+    let lastProgressPercent = 0;
     const generatedPaths: string[] = [];
     try {
       if (!connection || !supportsScheduledDatabaseBackup(connection.db_type)) throw new Error("The backup connection is unavailable or unsupported.");
@@ -194,9 +205,8 @@ export function useScheduledDatabaseBackups(options: { scheduler?: boolean } = {
       }
 
       let exportIndex = 0;
-      let totalExports = 0;
       let includedTableCount = 0;
-      for (const database of selectedDatabases) {
+      for (const [databaseIndex, database] of selectedDatabases.entries()) {
         if (cancellationRequested.has(runId)) {
           finalStatus = "cancelled";
           break;
@@ -222,9 +232,7 @@ export function useScheduledDatabaseBackups(options: { scheduler?: boolean } = {
             if (scope.includedTables.length === 0) continue;
             scopedDatabasePlan.push({ ...item, selectedTables: scope.selectedTables, excludedTables: scope.excludedTables });
           }
-          totalExports += scopedDatabasePlan.length;
-
-          for (const item of scopedDatabasePlan) {
+          for (const [planIndex, item] of scopedDatabasePlan.entries()) {
             if (cancellationRequested.has(runId)) {
               finalStatus = "cancelled";
               break;
@@ -252,12 +260,24 @@ export function useScheduledDatabaseBackups(options: { scheduler?: boolean } = {
                 batchSize: 1000,
               },
               (progress) => {
+                const progressPercent = databaseBackupProgressPercent({
+                  completedDatabases: databaseIndex,
+                  totalDatabases: selectedDatabases.length,
+                  completedExports: planIndex,
+                  totalExports: scopedDatabasePlan.length,
+                  currentObjectIndex: progress.objectIndex,
+                  currentTotalObjects: progress.totalObjects,
+                  currentExportComplete: progress.status === "Done",
+                });
+                if (progressPercent !== lastProgressPercent) {
+                  lastProgressPercent = progressPercent;
+                  updateRun(runId, { progressPercent }, false);
+                }
                 updateDatabaseExportTask(runId, {
                   ...progress,
                   exportId: runId,
                   currentObject: `${item.displayName}: ${progress.currentObject || item.displayName}`,
-                  objectIndex: exportIndex - 1,
-                  totalObjects: totalExports,
+                  overallPercent: progressPercent,
                 });
               },
             );
@@ -283,6 +303,13 @@ export function useScheduledDatabaseBackups(options: { scheduler?: boolean } = {
           });
         }
         if (finalStatus !== "success") break;
+        lastProgressPercent = databaseBackupProgressPercent({
+          completedDatabases: databaseIndex + 1,
+          totalDatabases: selectedDatabases.length,
+          completedExports: 0,
+          totalExports: 0,
+        });
+        updateRun(runId, { progressPercent: lastProgressPercent }, false);
       }
       if (schedule.tableFilterMode !== "all" && includedTableCount === 0) {
         throw new Error(`No tables matched the configured ${schedule.tableFilterMode} backup rules.`);
@@ -312,6 +339,7 @@ export function useScheduledDatabaseBackups(options: { scheduler?: boolean } = {
         status: finalStatus,
         completedAt: completedAt.toISOString(),
         files: [...run.files],
+        progressPercent: finalStatus === "success" ? 100 : lastProgressPercent,
         error: finalError || undefined,
       });
       updateDatabaseExportTask(runId, {
@@ -323,6 +351,7 @@ export function useScheduledDatabaseBackups(options: { scheduler?: boolean } = {
         totalRows: null,
         status: finalStatus === "success" ? "Done" : finalStatus === "cancelled" ? "Cancelled" : "Error",
         error: finalError || null,
+        overallPercent: finalStatus === "success" ? 100 : lastProgressPercent,
       });
 
       const latestSchedule = schedules.value.find((item) => item.id === schedule.id);
@@ -410,6 +439,7 @@ export function useScheduledDatabaseBackups(options: { scheduler?: boolean } = {
     setScheduleEnabled,
     deleteSchedule,
     deleteRun,
+    renameRun,
     runSchedule,
     cancelRun,
     processDueSchedules,

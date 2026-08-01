@@ -3,10 +3,12 @@ import { readFileSync } from "node:fs";
 import { test } from "vitest";
 import {
   databaseBackupFilePath,
+  databaseBackupProgressPercent,
   databaseBackupRunsToPrune,
   databaseBackupScheduleIsDue,
   databaseBackupTableNamesAreCaseSensitive,
   nextDatabaseBackupRunAt,
+  normalizeDatabaseBackupRun,
   normalizeDatabaseBackupSchedule,
   normalizeDatabaseBackupTablePatterns,
   resolveScheduledDatabaseBackupTableScope,
@@ -130,6 +132,52 @@ test("retention pruning keeps the newest successful runs", () => {
   );
 });
 
+test("backup history normalization preserves an independent display name and progress", () => {
+  const normalized = normalizeDatabaseBackupRun({
+    ...run("named", "2026-07-16T03:00:00.000Z"),
+    displayName: "Before migration",
+    progressPercent: 125,
+  });
+
+  assert.equal(normalized?.displayName, "Before migration");
+  assert.equal(normalized?.scheduleName, "Nightly backup");
+  assert.equal(normalized?.progressPercent, 100);
+});
+
+test("backup progress combines databases, schema exports, and current objects", () => {
+  assert.equal(
+    databaseBackupProgressPercent({
+      completedDatabases: 0,
+      totalDatabases: 2,
+      completedExports: 1,
+      totalExports: 4,
+      currentObjectIndex: 5,
+      currentTotalObjects: 10,
+    }),
+    19,
+  );
+  assert.equal(
+    databaseBackupProgressPercent({
+      completedDatabases: 1,
+      totalDatabases: 2,
+      completedExports: 0,
+      totalExports: 1,
+      currentExportComplete: true,
+    }),
+    99,
+  );
+  assert.equal(
+    databaseBackupProgressPercent({
+      completedDatabases: 2,
+      totalDatabases: 2,
+      completedExports: 0,
+      totalExports: 0,
+      backupComplete: true,
+    }),
+    100,
+  );
+});
+
 test("all-database backups use the complete database list", () => {
   assert.deepEqual(resolveScheduledDatabaseBackupTargets([], ["visible", "hidden"]), ["visible", "hidden"]);
 });
@@ -210,4 +258,13 @@ test("scheduled backup history translates stable backend errors inline", () => {
 
   assert.match(source, /\{\{ translateBackendError\(t, run\.error\) \}\}/);
   assert.doesNotMatch(source, /\{\{ run\.error \}\}/);
+});
+
+test("scheduled backup history exposes rename and overall percentage controls", () => {
+  const source = readFileSync("apps/desktop/src/components/backup/ScheduledDatabaseBackupSettings.vue", "utf8");
+  const scheduler = readFileSync("apps/desktop/src/composables/useScheduledDatabaseBackups.ts", "utf8");
+
+  assert.match(source, /run\.displayName \|\| run\.scheduleName/);
+  assert.match(source, /role="progressbar"/);
+  assert.match(scheduler, /overallPercent: progressPercent/);
 });
