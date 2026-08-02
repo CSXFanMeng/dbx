@@ -5391,15 +5391,16 @@ pub async fn sort_tables_by_fk_dependency(
         .get(connection_id)
         .map(|config| config.db_type)
         .ok_or_else(|| format!("Connection config not found: {connection_id}"))?;
-    let dependencies = if db_type == DatabaseType::Postgres {
+    let postgres_pool = if db_type == DatabaseType::Postgres {
         let pool_key = state.get_or_create_pool(connection_id, Some(database)).await?;
-        let pool = {
+        {
             let connections = state.connections.read().await;
-            match connections.get(&pool_key) {
-                Some(PoolKind::Postgres(pool)) => pool.clone(),
-                _ => return Err("PostgreSQL pool not found".to_string()),
-            }
-        };
+            native_postgres_dependency_pool(connections.get(&pool_key))
+        }
+    } else {
+        None
+    };
+    let dependencies = if let Some(pool) = postgres_pool {
         db::postgres::list_table_dependencies(&pool, schema).await?
     } else {
         let mut dependencies = Vec::new();
@@ -5411,6 +5412,13 @@ pub async fn sort_tables_by_fk_dependency(
     };
 
     Ok(sort_table_names_by_dependencies(tables, &dependencies, parents_first))
+}
+
+fn native_postgres_dependency_pool(pool_kind: Option<&PoolKind>) -> Option<deadpool_postgres::Pool> {
+    match pool_kind {
+        Some(PoolKind::Postgres(pool)) => Some(pool.clone()),
+        _ => None,
+    }
 }
 
 fn sort_table_names_by_dependencies(
@@ -6741,6 +6749,13 @@ mod tests {
             sort_table_names_by_dependencies(&tables, &dependencies, true),
             vec!["users".to_string(), "logs".to_string(), "orders".to_string()]
         );
+    }
+
+    #[test]
+    fn postgres_dependency_batch_query_keeps_agent_fallback() {
+        let agent = PoolKind::agent(crate::db::agent_driver::AgentDriverClient::test_stub());
+
+        assert!(native_postgres_dependency_pool(Some(&agent)).is_none());
     }
 
     async fn test_app_state() -> (AppState, std::path::PathBuf) {
