@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "vitest";
 import {
+  DatabaseBackupConnectionQueue,
+  databaseBackupAggregateExportStatus,
   databaseBackupFilePath,
   databaseBackupProgressPercent,
   databaseBackupRunsToPrune,
@@ -57,6 +59,14 @@ function run(id: string, startedAt: string): DatabaseBackupRun {
     completedAt: startedAt,
     files: [],
   };
+}
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 test("daily backup advances to the next configured local time", () => {
@@ -178,6 +188,63 @@ test("backup progress combines databases, schema exports, and current objects", 
   );
 });
 
+test("backup connection queue serializes two runs on the same connection", async () => {
+  const queue = new DatabaseBackupConnectionQueue();
+  const firstStarted = deferred();
+  const releaseFirst = deferred();
+  const events: string[] = [];
+
+  const first = queue.run("connection-1", async () => {
+    events.push("first:start");
+    firstStarted.resolve();
+    await releaseFirst.promise;
+    events.push("first:end");
+  });
+  await firstStarted.promise;
+  const second = queue.run("connection-1", async () => {
+    events.push("second:start");
+  });
+
+  await Promise.resolve();
+  assert.deepEqual(events, ["first:start"]);
+  releaseFirst.resolve();
+  await Promise.all([first, second]);
+  assert.deepEqual(events, ["first:start", "first:end", "second:start"]);
+});
+
+test("backup connection queue allows different connections to run in parallel", async () => {
+  const queue = new DatabaseBackupConnectionQueue();
+  const firstStarted = deferred();
+  const secondStarted = deferred();
+  const releaseFirst = deferred();
+  const releaseSecond = deferred();
+  const events: string[] = [];
+
+  const first = queue.run("connection-1", async () => {
+    events.push("connection-1:start");
+    firstStarted.resolve();
+    await releaseFirst.promise;
+  });
+  const second = queue.run("connection-2", async () => {
+    events.push("connection-2:start");
+    secondStarted.resolve();
+    await releaseSecond.promise;
+  });
+
+  await Promise.all([firstStarted.promise, secondStarted.promise]);
+  assert.deepEqual([...events].sort(), ["connection-1:start", "connection-2:start"]);
+  releaseFirst.resolve();
+  releaseSecond.resolve();
+  await Promise.all([first, second]);
+});
+
+test("multi-schema child completion stays running until the aggregate finishes", () => {
+  const childStatuses = ["Running", "Done", "Running", "Done"] as const;
+  const aggregateStatuses = [...childStatuses.map((status) => databaseBackupAggregateExportStatus(status, false)), databaseBackupAggregateExportStatus("Done", true)];
+
+  assert.deepEqual(aggregateStatuses, ["Running", "Running", "Running", "Running", "Done"]);
+});
+
 test("all-database backups use the complete database list", () => {
   assert.deepEqual(resolveScheduledDatabaseBackupTargets([], ["visible", "hidden"]), ["visible", "hidden"]);
 });
@@ -266,5 +333,7 @@ test("scheduled backup history exposes rename and overall percentage controls", 
 
   assert.match(source, /run\.displayName \|\| run\.scheduleName/);
   assert.match(source, /role="progressbar"/);
+  assert.match(scheduler, /databaseBackupConnectionQueue\.run\(schedule\.connectionId/);
+  assert.match(scheduler, /status: databaseBackupAggregateExportStatus\(progress\.status, false\)/);
   assert.match(scheduler, /overallPercent: progressPercent/);
 });

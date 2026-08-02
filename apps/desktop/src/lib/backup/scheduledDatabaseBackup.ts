@@ -8,11 +8,38 @@ export const DATABASE_BACKUP_CONFIG_CHANGED_EVENT = "dbx:database-backup-config-
 export const MAX_DATABASE_BACKUP_HISTORY = 200;
 
 export type DatabaseBackupFrequency = "hourly" | "daily" | "weekly";
+export type DatabaseBackupExportStatus = "Running" | "Done" | "Error" | "Cancelled";
 export type DatabaseBackupRunStatus = "running" | "success" | "failed" | "cancelled";
 export type DatabaseBackupRunTrigger = "manual" | "scheduled";
 export type DatabaseBackupTableFilterMode = "all" | "include" | "exclude";
 
 const CONSISTENT_BACKUP_DATABASE_TYPES = new Set(["mysql", "postgres"]);
+
+export class DatabaseBackupConnectionQueue {
+  private readonly tails = new Map<string, Promise<void>>();
+
+  async run<T>(connectionId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.tails.get(connectionId) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = previous.then(() => gate);
+    this.tails.set(connectionId, tail);
+
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.tails.get(connectionId) === tail) this.tails.delete(connectionId);
+    }
+  }
+}
+
+export function databaseBackupAggregateExportStatus(status: DatabaseBackupExportStatus, isFinal: boolean): DatabaseBackupExportStatus {
+  return isFinal ? status : "Running";
+}
 
 export function supportsScheduledDatabaseBackup(databaseType: string | undefined): boolean {
   return !!databaseType && CONSISTENT_BACKUP_DATABASE_TYPES.has(databaseType);
