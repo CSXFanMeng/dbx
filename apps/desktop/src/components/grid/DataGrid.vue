@@ -4497,22 +4497,6 @@ async function startCellEdit(rowId: number, columnIndex: number, expanded: boole
   return true;
 }
 
-async function startDomCellEdit(rowId: number, columnIndex: number, displayText: string, event: MouseEvent) {
-  const target = event.currentTarget;
-  if (!(await hydrateLargeValueCell(rowId, columnIndex))) return;
-  const item = getRowItem(rowId);
-  const editText = item ? cellEditorTextForValue(item.data[columnIndex], columnIndex) : displayText;
-  await startCellEdit(
-    rowId,
-    columnIndex,
-    cellEditContentNeedsExpandedEditor({
-      displayText,
-      editText,
-      target,
-    }),
-  );
-}
-
 function readonlyTextCellMatches(rowId: number | undefined, columnIndex: number): boolean {
   return !!readonlyTextCell.value && readonlyTextCell.value.rowId === rowId && readonlyTextCell.value.col === columnIndex;
 }
@@ -4546,7 +4530,7 @@ async function onDomCellDblClick(item: RowItem, actualColIdx: number, event: Mou
     await startReadonlyCellTextSelection(item.id, actualColIdx, displayText, cellEditContentNeedsExpandedEditor({ displayText, editText: cellEditorTextForValue(item.data[actualColIdx], actualColIdx), target: event.currentTarget }));
     return;
   }
-  await startDomCellEdit(item.id, actualColIdx, formatCellCached(item.data[actualColIdx], actualColIdx), event);
+  await startCellEdit(item.id, actualColIdx, true);
 }
 
 function cellEditContentNeedsExpandedEditor(options: { displayText: string; editText: string; target: EventTarget | null }): boolean {
@@ -7729,7 +7713,7 @@ async function onCanvasDblClick(event: MouseEvent) {
     return;
   }
   if (booleanCellsUseCheckbox.value && isBooleanGridCell(item, actualColIdx) && canEditCellItem(item, actualColIdx)) return;
-  await startCellEdit(item.id, actualColIdx, canvasCellContentOverflows(item, actualColIdx, hit.visibleColIdx));
+  await startCellEdit(item.id, actualColIdx, true);
 }
 
 function canvasCellContentOverflows(item: RowItem, actualColIdx: number, visibleColIdx: number): boolean {
@@ -8666,7 +8650,7 @@ async function onTransposeCellDblClick(rowIndex: number, actualColIdx: number, d
     await startReadonlyCellTextSelection(item.id, actualColIdx, displayText, cellEditContentNeedsExpandedEditor({ displayText, editText: cellEditorTextForValue(item.data[actualColIdx], actualColIdx), target }));
     return;
   }
-  await startDomCellEdit(item.id, actualColIdx, displayText, event);
+  await startCellEdit(item.id, actualColIdx, true);
 }
 
 function onTransposeCellContext(rowIndex: number, actualColIdx: number, event: MouseEvent) {
