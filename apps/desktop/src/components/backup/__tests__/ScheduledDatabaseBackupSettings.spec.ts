@@ -39,6 +39,7 @@ vi.mock("@/stores/connectionStore", () => ({
     sqlFileSource: null,
   }),
 }));
+vi.mock("@/lib/backend/tauriRuntime", () => ({ isTauriRuntime: () => true }));
 
 vi.mock("@/composables/useScheduledDatabaseBackups", () => ({
   useScheduledDatabaseBackups: () => ({
@@ -48,6 +49,9 @@ vi.mock("@/composables/useScheduledDatabaseBackups", () => ({
     activeRunIds: mocks.activeRunIds,
     cancellingRunIds: mocks.cancellingRunIds,
     activeRuns: { __v_isRef: true, value: mocks.activeRuns },
+    heartbeat: { __v_isRef: true, value: null },
+    destinationRoot: { __v_isRef: true, value: null },
+    error: { __v_isRef: true, value: "" },
     saveSchedule: mocks.saveSchedule,
     setScheduleEnabled: mocks.setScheduleEnabled,
     deleteSchedule: mocks.deleteSchedule,
@@ -78,6 +82,8 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 }));
 
 vi.mock("@/lib/backend/api", () => ({
+  databaseBackupBackground: vi.fn(async () => ({ enabled: false, platform: "windows" })),
+  databaseBackupCommand: vi.fn(async () => "2026-09-13T02:00:00Z"),
   listDatabases: mocks.listDatabases,
   deleteDatabaseBackupFiles: vi.fn(),
   revealPathInFileManager: vi.fn(),
@@ -674,7 +680,7 @@ describe("ScheduledDatabaseBackupSettings schedule dialog", () => {
     expect(mocks.databaseExportDestinationNeedsConfirmation).toHaveBeenCalledWith("/backups");
     expect(mocks.openDirectory).toHaveBeenCalledWith(expect.objectContaining({ directory: true, defaultPath: "/backups" }));
     expect(mocks.recordDatabaseExportDestination).toHaveBeenCalledWith("/backups");
-    expect(mocks.runSchedule).toHaveBeenCalledWith("schedule-1", "manual");
+    expect(mocks.runSchedule).toHaveBeenCalledWith("schedule-1");
   });
 
   it("does not run a legacy schedule when destination confirmation is cancelled", async () => {
