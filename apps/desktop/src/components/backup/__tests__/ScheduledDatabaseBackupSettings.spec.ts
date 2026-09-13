@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   deleteSchedule: vi.fn(),
   deleteRun: vi.fn(),
   deleteRuns: vi.fn(),
+  renameRun: vi.fn(),
   runSchedule: vi.fn(),
   runOneShot: vi.fn(),
   cancelRun: vi.fn(),
@@ -57,6 +58,7 @@ vi.mock("@/composables/useScheduledDatabaseBackups", () => ({
     deleteSchedule: mocks.deleteSchedule,
     deleteRun: mocks.deleteRun,
     deleteRuns: mocks.deleteRuns,
+    renameRun: mocks.renameRun,
     runSchedule: mocks.runSchedule,
     runOneShot: mocks.runOneShot,
     cancelRun: mocks.cancelRun,
@@ -284,6 +286,7 @@ afterEach(() => {
   mocks.saveSchedule.mockClear();
   mocks.deleteRun.mockClear();
   mocks.deleteRuns.mockClear();
+  mocks.renameRun.mockReset();
   mocks.cancelRun.mockClear();
   mocks.runSchedule.mockReset();
   mocks.runSchedule.mockResolvedValue(null);
@@ -292,6 +295,37 @@ afterEach(() => {
 });
 
 describe("ScheduledDatabaseBackupSettings schedule dialog", () => {
+  it("shows a backup display name and saves edits through the rename dialog", async () => {
+    mocks.runs.push({
+      id: "renamed-run",
+      scheduleName: "Nightly backup",
+      displayName: "Before migration",
+      connectionId: "mysql-1",
+      connectionName: "Local MySQL",
+      trigger: "manual",
+      source: "scheduled",
+      status: "success",
+      startedAt: "2026-08-18T00:00:00.000Z",
+      files: [],
+    });
+    mocks.renameRun.mockResolvedValue(true);
+    await mountSettings();
+
+    expect(document.body.textContent).toContain("Before migration");
+    buttonWithTitle(String(i18n.global.t("databaseBackup.renameBackup"))).click();
+    await flush();
+    const input = currentDialog().querySelector<HTMLInputElement>("input")!;
+    expect(input.value).toBe("Before migration");
+    input.value = "After migration";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await flush();
+    saveScheduleButton().click();
+    await flush();
+
+    expect(mocks.renameRun).toHaveBeenCalledWith("renamed-run", "After migration");
+    expect(document.body.querySelector('[data-slot="dialog-content"]')).toBeNull();
+  });
+
   it("reconnects once when loading databases finds a closed connection", async () => {
     mocks.connections.push({ id: "mysql-1", name: "Local MySQL", db_type: "mysql" });
     mocks.listDatabases.mockRejectedValueOnce(new Error("MySQL connection failed: Input/output error: connection closed")).mockResolvedValueOnce([{ name: "app" }]);
@@ -621,6 +655,11 @@ describe("ScheduledDatabaseBackupSettings schedule dialog", () => {
     const pendingRun = deferred<DatabaseBackupRun>();
     mocks.runOneShot.mockReturnValueOnce(pendingRun.promise);
     await mountSettings();
+
+    const progress = document.body.querySelector('[role="progressbar"]');
+    expect(progress?.getAttribute("aria-valuenow")).toBe("25");
+    expect(document.body.textContent).toContain("25%");
+    expect(buttonWithTitle(String(i18n.global.t("databaseBackup.renameBackup"))).disabled).toBe(true);
 
     buttonWithText(String(i18n.global.t("databaseBackup.oneShotBackup"))).click();
     await flush();

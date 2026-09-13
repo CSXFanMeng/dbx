@@ -318,6 +318,27 @@ async fn live_mysql_worker_exports_saved_connection_and_applies_retention() {
             previous = Some(path);
         }
         assert_eq!(service.store.snapshot().await?.runs.len(), 1);
+        let mut empty_scope = schedule(dir.path()).config;
+        empty_scope.databases = vec![database.clone()];
+        empty_scope.table_filter_mode = "include".into();
+        empty_scope.table_patterns = vec!["missing_table".into()];
+        let run = service.store.enqueue(request(empty_scope)).await?;
+        let completed = tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let snapshot = service.store.snapshot().await.unwrap();
+                let current = snapshot.runs.iter().find(|r| r.id == run.id).unwrap();
+                if current.status != "running" {
+                    break current.clone();
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .map_err(|_| "Empty-scope backup timed out")?;
+        assert_eq!(completed.status, "failed");
+        assert!(completed.error.as_deref().unwrap().contains("No tables matched"));
+        assert!(completed.files.is_empty());
+        assert!(previous.unwrap().exists());
         Ok::<_, String>(())
     })
     .catch_unwind()
