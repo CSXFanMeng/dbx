@@ -221,6 +221,55 @@ impl BackupService {
             if schemas.is_empty() {
                 return Err(format!("Database {database} has no exportable schemas"));
             }
+            // Metadata discovery may be slow; finish it before starting the snapshot idle timeout.
+            let mut targets = Vec::new();
+            for schema_name in &schemas {
+                check_cancel(stop)?;
+                let mut selected_tables = Vec::new();
+                let mut excluded_tables = Vec::new();
+                if job.config.table_filter_mode != "all" {
+                    let tables = schema::list_tables_core(
+                        state,
+                        &job.config.connection_id,
+                        database,
+                        schema_name,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await?;
+                    for table in &tables {
+                        let matched = job
+                            .config
+                            .table_patterns
+                            .iter()
+                            .any(|p| matches_pattern(p, &table.name, database, schema_name, sensitive));
+                        if matched {
+                            if job.config.table_filter_mode == "include" {
+                                selected_tables.push(table.name.clone());
+                            } else {
+                                excluded_tables.push(table.name.clone());
+                            }
+                        }
+                    }
+                    let included = if job.config.table_filter_mode == "include" {
+                        selected_tables.len()
+                    } else {
+                        tables.len() - excluded_tables.len()
+                    };
+                    included_count += included;
+                    if included == 0 {
+                        continue;
+                    }
+                }
+                targets.push((schema_name.clone(), selected_tables, excluded_tables));
+            }
+            if targets.is_empty() {
+                continue;
+            }
+            check_cancel(stop)?;
             let snapshot = database_export::begin_database_backup_snapshot_core_for_export(
                 state,
                 &job.config.connection_id,
@@ -229,47 +278,8 @@ impl BackupService {
             )
             .await?;
             let result = async {
-                for (schema_index, schema_name) in schemas.iter().enumerate() {
+                for (schema_index, (schema_name, selected_tables, excluded_tables)) in targets.iter().enumerate() {
                     check_cancel(stop)?;
-                    let mut selected_tables = Vec::new();
-                    let mut excluded_tables = Vec::new();
-                    if job.config.table_filter_mode != "all" {
-                        let tables = schema::list_tables_core(
-                            state,
-                            &job.config.connection_id,
-                            database,
-                            schema_name,
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                        )
-                        .await?;
-                        for table in &tables {
-                            let matched = job
-                                .config
-                                .table_patterns
-                                .iter()
-                                .any(|p| matches_pattern(p, &table.name, database, schema_name, sensitive));
-                            if matched {
-                                if job.config.table_filter_mode == "include" {
-                                    selected_tables.push(table.name.clone());
-                                } else {
-                                    excluded_tables.push(table.name.clone());
-                                }
-                            }
-                        }
-                        let included = if job.config.table_filter_mode == "include" {
-                            selected_tables.len()
-                        } else {
-                            tables.len() - excluded_tables.len()
-                        };
-                        included_count += included;
-                        if included == 0 {
-                            continue;
-                        }
-                    }
                     let stem = if schemas.len() > 1 { format!("{database}.{schema_name}") } else { database.clone() };
                     let name = render_template(
                         job.config.file_name_pattern.as_deref().unwrap_or(DEFAULT_FILE),
@@ -303,8 +313,8 @@ impl BackupService {
                         database: database.clone(),
                         schema: schema_name.clone(),
                         file_path: file.file_path,
-                        selected_tables,
-                        excluded_tables,
+                        selected_tables: selected_tables.clone(),
+                        excluded_tables: excluded_tables.clone(),
                         include_structure: job.config.include_structure,
                         include_data: job.config.include_data,
                         include_objects: job.config.include_objects,
@@ -343,7 +353,7 @@ impl BackupService {
                                 0.0
                             };
                             run.progress_percent = ((db_index as f64
-                                + (schema_index as f64 + fraction) / schemas.len() as f64)
+                                + (schema_index as f64 + fraction) / targets.len() as f64)
                                 / databases.len() as f64
                                 * 100.0)
                                 .min(99.0);
