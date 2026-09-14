@@ -176,14 +176,15 @@ async fn deletion_only_removes_recorded_files_within_the_backup_root() {
 }
 
 #[tokio::test]
-async fn two_workers_share_one_leader_and_cancel_survives_reopen() {
+async fn draining_transfers_leadership_without_cancelling_and_cancel_survives_reopen() {
     let dir = tempfile::tempdir().unwrap();
     let service = service(dir.path(), None).await;
     let run = service.store.enqueue(request(schedule(dir.path()).config)).await.unwrap();
     assert!(service.store.cancel(run.id.clone()).await.unwrap());
     let first_stop = CancellationToken::new();
+    let first_drain = CancellationToken::new();
     let second_stop = CancellationToken::new();
-    let first = service.start(first_stop.clone());
+    let first = service.start_with_drain(first_stop.clone(), first_drain.clone());
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let snapshot = service.store.snapshot().await.unwrap();
@@ -200,8 +201,9 @@ async fn two_workers_share_one_leader_and_cancel_survives_reopen() {
     assert!(fs2::FileExt::try_lock_exclusive(&probe).is_err());
     let second = service.start(second_stop.clone());
     tokio::time::sleep(Duration::from_millis(100)).await;
-    first_stop.cancel();
-    first.await.unwrap();
+    first_drain.cancel();
+    tokio::time::timeout(Duration::from_secs(5), first).await.unwrap().unwrap();
+    assert!(!first_stop.is_cancelled());
     let previous = service.store.snapshot().await.unwrap().heartbeat;
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
