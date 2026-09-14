@@ -242,7 +242,7 @@ async fn live_mysql_worker_exports_saved_connection_and_applies_retention() {
         "database":null, "connect_timeout_secs":10, "query_timeout_secs":30
     }))
     .unwrap();
-    service.state.storage.save_connections(&[config.clone()]).await.unwrap();
+    service.state.storage.save_connections(std::slice::from_ref(&config)).await.unwrap();
     service.state.configs.write().await.insert(config.id.clone(), config);
     let database = format!("dbx_worker_{}", uuid::Uuid::new_v4().simple());
     execute_sql_statement(&service.state, "mysql", "", &format!("CREATE DATABASE `{database}`"), None, None)
