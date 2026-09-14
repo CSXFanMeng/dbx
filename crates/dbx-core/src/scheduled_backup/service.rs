@@ -38,8 +38,13 @@ impl BackupService {
     }
 
     pub fn start(&self, stop: CancellationToken) -> tokio::task::JoinHandle<()> {
+        self.start_with_drain(stop, CancellationToken::new())
+    }
+
+    /// Draining finishes the active job before releasing leadership; stopping cancels it.
+    pub fn start_with_drain(&self, stop: CancellationToken, drain: CancellationToken) -> tokio::task::JoinHandle<()> {
         let service = self.clone();
-        tokio::spawn(async move { service.serve(stop).await })
+        tokio::spawn(async move { service.serve(stop, drain).await })
     }
 
     pub async fn command(&self, command: BackupCommand) -> Result<Value, String> {

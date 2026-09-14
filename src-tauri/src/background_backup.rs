@@ -357,8 +357,9 @@ pub fn run_if_requested() -> bool {
             let storage = Storage::open(&dir.join("dbx.db")).await?;
             let state = Arc::new(AppState::new_with_plugin_dir(storage, dir.join("plugins")));
             let stop = CancellationToken::new();
+            let drain = CancellationToken::new();
             let service = BackupService::new(state.clone(), &dir, None);
-            let worker = service.start(stop.clone());
+            let worker = service.start_with_drain(stop.clone(), drain.clone());
             #[cfg(unix)]
             let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).map_err(|e| e.to_string())?;
             loop {
@@ -366,8 +367,10 @@ pub fn run_if_requested() -> bool {
                     _ = tokio::signal::ctrl_c() => break,
                     _ = async { #[cfg(unix)] { terminate.recv().await; } #[cfg(not(unix))] { std::future::pending::<()>().await; } } => break,
                     _ = tokio::time::sleep(Duration::from_secs(1)) => {
+                        if worker.is_finished() { break; }
                         let ui_alive = lease.as_ref().and_then(|p| std::fs::metadata(p).ok()).and_then(|m| m.modified().ok())
                             .and_then(|time| time.elapsed().ok()).is_some_and(|age| age < Duration::from_secs(10));
+                        if ui && !ui_alive && marker(&dir).exists() { drain.cancel(); }
                         if (managed || ui) && !marker(&dir).exists() && !(ui && ui_alive) { break; }
                     }
                 }

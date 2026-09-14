@@ -12,9 +12,9 @@ use crate::{
 };
 
 impl BackupService {
-    pub(crate) async fn serve(&self, stop: CancellationToken) {
+    pub(crate) async fn serve(&self, stop: CancellationToken, drain: CancellationToken) {
         let mut leader = None;
-        while !stop.is_cancelled() {
+        while !stop.is_cancelled() && !drain.is_cancelled() {
             if leader.is_none() {
                 let acquired = std::fs::create_dir_all(&self.store.directory)
                     .and_then(|_| {
@@ -34,12 +34,12 @@ impl BackupService {
                     }
                 }
             }
-            if leader.is_some() {
+            if leader.is_some() && !drain.is_cancelled() {
                 if let Err(error) = self.tick(&stop).await {
                     log::error!("[database-backup] scheduler failed: {error}");
                 }
             }
-            tokio::select! { _ = stop.cancelled() => break, _ = tokio::time::sleep(Duration::from_secs(2)) => {} }
+            tokio::select! { _ = stop.cancelled() => break, _ = drain.cancelled() => break, _ = tokio::time::sleep(Duration::from_secs(2)) => {} }
         }
         // Dropping the locked handle transfers leadership, including after an unclean process exit.
         drop(leader);
