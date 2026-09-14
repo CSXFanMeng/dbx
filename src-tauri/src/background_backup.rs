@@ -156,6 +156,7 @@ fn run(command: &mut Command) -> Result<(), String> {
     }
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 fn xml(value: &str) -> String {
     value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
 }
