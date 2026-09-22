@@ -225,9 +225,13 @@ async fn draining_transfers_leadership_without_cancelling_and_cancel_survives_re
     assert_eq!(snapshot.runs[0].status, "cancelled");
 }
 
-#[tokio::test]
+#[test]
 #[ignore = "requires a disposable MySQL endpoint configured by DBX_LIVE_SQL_FILE_MYSQL_* variables"]
-async fn live_mysql_worker_exports_saved_connection_and_applies_retention() {
+fn live_mysql_worker_exports_saved_connection_and_applies_retention() {
+    live_backup_runtime().block_on(live_mysql_worker_scenario());
+}
+
+async fn live_mysql_worker_scenario() {
     use crate::{models::connection::ConnectionConfig, query::execute_sql_statement};
     use futures::FutureExt;
     use std::io::Read;
@@ -352,4 +356,194 @@ async fn live_mysql_worker_exports_saved_connection_and_applies_retention() {
     service.state.shutdown(Duration::from_secs(3)).await;
     cleanup.unwrap();
     outcome.unwrap().unwrap();
+}
+
+/// Runs a live scenario on a runtime configured like the processes that drive
+/// backups. The export path nests very large async futures, so it needs the same
+/// roomy worker stack the desktop runtime sets; on tokio's default stack the
+/// process aborts with `fatal runtime error: stack overflow` instead of
+/// reporting a failed assertion.
+fn live_backup_runtime() -> tokio::runtime::Runtime {
+    super::worker_runtime().unwrap()
+}
+
+fn live_postgres_config(id: &str, database: &str) -> crate::models::connection::ConnectionConfig {
+    serde_json::from_value(json!({
+        "id": id, "name": id, "db_type": "postgres", "save_password": true,
+        "host": std::env::var("DBX_LIVE_SQL_FILE_POSTGRES_HOST").unwrap(),
+        "port": std::env::var("DBX_LIVE_SQL_FILE_POSTGRES_PORT").ok().and_then(|p| p.parse::<u16>().ok()).unwrap_or(5432),
+        "username": std::env::var("DBX_LIVE_SQL_FILE_POSTGRES_USER").unwrap(),
+        "password": std::env::var("DBX_LIVE_SQL_FILE_POSTGRES_PASSWORD").unwrap(),
+        "database": database, "connect_timeout_secs": 10, "query_timeout_secs": 30
+    }))
+    .unwrap()
+}
+
+async fn await_run(service: &BackupService, run_id: &str) -> BackupRun {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let snapshot = service.store.snapshot().await.unwrap();
+            let current = snapshot.runs.iter().find(|r| r.id == run_id).unwrap().clone();
+            if current.status != "running" && current.status != "queued" {
+                break current;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("backup run did not finish within 60s")
+}
+
+async fn enqueue_and_run(service: &BackupService, schedule_id: &str) -> BackupRun {
+    let run = service
+        .store
+        .enqueue(RunRequest {
+            schedule_id: Some(schedule_id.into()),
+            config: None,
+            display_name: None,
+            time_zone: None,
+        })
+        .await
+        .unwrap();
+    await_run(service, &run.id).await
+}
+
+fn plan_with_id(dir: &std::path::Path, id: &str) -> BackupSchedule {
+    let mut plan = schedule(dir);
+    plan.id = id.to_string();
+    plan.enabled = false;
+    plan
+}
+
+fn read_backup(path: &str, gzip: bool) -> String {
+    let file = std::fs::File::open(path).unwrap();
+    if !gzip {
+        return std::fs::read_to_string(path).unwrap();
+    }
+    use std::io::Read;
+    let mut sql = String::new();
+    flate2::read::GzDecoder::new(file).read_to_string(&mut sql).unwrap();
+    sql
+}
+
+#[test]
+#[ignore = "requires a disposable PostgreSQL endpoint configured by DBX_LIVE_SQL_FILE_POSTGRES_* variables"]
+fn live_postgres_worker_exports_selected_tables_across_schemas() {
+    use crate::query::execute_sql_statement;
+    live_backup_runtime().block_on(async {
+        let dir = tempfile::tempdir().unwrap();
+        let service = service(dir.path(), None).await;
+        let stop = CancellationToken::new();
+        let worker = service.start(stop.clone());
+        let admin_id = "postgres-admin";
+        let admin = live_postgres_config(admin_id, "postgres");
+        service.state.storage.save_connections(std::slice::from_ref(&admin)).await.unwrap();
+        service.state.configs.write().await.insert(admin.id.clone(), admin);
+        let database = format!("dbx_pg_backup_{}", uuid::Uuid::new_v4().simple());
+        execute_sql_statement(
+            &service.state,
+            admin_id,
+            "postgres",
+            &format!("CREATE DATABASE \"{database}\""),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let config = live_postgres_config("postgres", &database);
+        service.state.storage.save_connections(std::slice::from_ref(&config)).await.unwrap();
+        service.state.configs.write().await.insert(config.id.clone(), config);
+
+        for statement in [
+            "CREATE SCHEMA app",
+            "CREATE SCHEMA audit",
+            "CREATE TABLE public.accounts (id integer PRIMARY KEY, name text NOT NULL)",
+            "CREATE TABLE app.orders (id integer PRIMARY KEY, total numeric(12,2) NOT NULL)",
+            "CREATE TABLE app.\"MixedCase\" (id integer PRIMARY KEY)",
+            "CREATE VIEW app.big_orders AS SELECT id, total FROM app.orders WHERE total > 100",
+            "CREATE TABLE audit.events (id integer PRIMARY KEY, note text)",
+            "INSERT INTO public.accounts VALUES (1, 'Alice')",
+            "INSERT INTO app.orders VALUES (7, 42.50), (8, 420.00)",
+            "INSERT INTO app.\"MixedCase\" VALUES (1)",
+            "INSERT INTO audit.events VALUES (9, 'sentinel-event')",
+        ] {
+            execute_sql_statement(&service.state, "postgres", &database, statement, None, None).await.unwrap();
+        }
+
+        // Table scope: only `app.orders` (schema-qualified pattern) and the
+        // case-sensitive `MixedCase` name, which pg resolves case-sensitively.
+        let mut plan = plan_with_id(dir.path(), "scope");
+        plan.retention_count = 2;
+        plan.config.connection_id = "postgres".into();
+        plan.config.databases = vec![database.clone()];
+        plan.config.output_compression = "gzip".into();
+        plan.config.table_filter_mode = "include".into();
+        plan.config.table_patterns = vec!["app.orders".into(), "MixedCase".into()];
+        service.command(BackupCommand::Save { schedule: plan }).await.unwrap();
+
+        let completed = enqueue_and_run(&service, "scope").await;
+        assert_eq!(completed.status, "success", "{:?}", completed.error);
+        assert_eq!(
+            completed.files.len(),
+            1,
+            "{:?}",
+            completed.files.iter().map(|f| &f.display_name).collect::<Vec<_>>()
+        );
+        let sql = read_backup(&completed.files[0].file_path, true);
+        assert!(sql.contains("CREATE TABLE \"app\".\"orders\""), "{sql}");
+        assert!(sql.contains("\"MixedCase\""), "{sql}");
+        assert!(sql.contains("420.00"), "{sql}");
+        assert!(!sql.contains("accounts"), "{sql}");
+        assert!(!sql.contains("events"), "{sql}");
+        // A view inside the same schema is not part of a table-name scope.
+        assert!(!sql.contains("big_orders"), "{sql}");
+
+        // Patterns are case-sensitive on PostgreSQL, and a scope that matches
+        // nothing must fail without leaving a partial file behind.
+        let mut empty = plan_with_id(dir.path(), "empty");
+        empty.config.connection_id = "postgres".into();
+        empty.config.databases = vec![database.clone()];
+        empty.config.output_compression = "gzip".into();
+        empty.config.table_filter_mode = "include".into();
+        empty.config.table_patterns = vec!["mixedcase".into()];
+        service.command(BackupCommand::Save { schedule: empty }).await.unwrap();
+        let cancelled = enqueue_and_run(&service, "empty").await;
+        assert_eq!(cancelled.status, "failed");
+        assert!(cancelled.error.as_deref().unwrap().contains("No tables matched"), "{:?}", cancelled.error);
+        assert!(cancelled.files.is_empty());
+
+        // Every schema of the database is exported when no table scope is set.
+        let mut full = plan_with_id(dir.path(), "full");
+        full.config.connection_id = "postgres".into();
+        full.config.databases = vec![database.clone()];
+        full.config.output_compression = "gzip".into();
+        service.command(BackupCommand::Save { schedule: full }).await.unwrap();
+        let full_run = enqueue_and_run(&service, "full").await;
+        assert_eq!(full_run.status, "success", "{:?}", full_run.error);
+        assert_eq!(full_run.files.len(), 3, "{:?}", full_run.files.iter().map(|f| &f.display_name).collect::<Vec<_>>());
+        let bodies =
+            full_run.files.iter().map(|f| (f.schema.clone(), read_backup(&f.file_path, true))).collect::<Vec<_>>();
+        let app = bodies.iter().find(|(schema, _)| schema == "app").unwrap();
+        assert!(app.1.contains("CREATE TABLE \"app\".\"MixedCase\""));
+        assert!(app.1.contains("big_orders"), "views belong to the schema-wide export");
+        let audit = bodies.iter().find(|(schema, _)| schema == "audit").unwrap();
+        assert!(audit.1.contains("sentinel-event"));
+        assert!(!audit.1.contains("orders"));
+        let public = bodies.iter().find(|(schema, _)| schema == "public").unwrap();
+        assert!(public.1.contains("accounts"));
+
+        stop.cancel();
+        worker.await.unwrap();
+        let cleanup = execute_sql_statement(
+            &service.state,
+            admin_id,
+            "postgres",
+            &format!("DROP DATABASE \"{database}\" WITH (FORCE)"),
+            None,
+            None,
+        )
+        .await;
+        service.state.shutdown(Duration::from_secs(3)).await;
+        cleanup.unwrap();
+    });
 }

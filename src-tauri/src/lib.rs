@@ -1439,15 +1439,11 @@ mod tests {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Metadata/completion command chains nest very large async futures (a single
-    // frame can be 60-150 KiB), which can exhaust tokio's default 2 MiB worker
-    // stack and abort the process with STATUS_STACK_OVERFLOW. Give the runtime a
-    // roomier worker stack so those chains have headroom.
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .thread_stack_size(16 * 1024 * 1024)
-        .build()
-        .expect("Failed to build tokio runtime");
+    // Metadata/completion command chains nest very large async futures and can
+    // exhaust tokio's default 2 MiB worker stack, which aborts the process with
+    // STATUS_STACK_OVERFLOW. Share the roomier stack the backup worker and Web
+    // server runtimes use as well.
+    let runtime = dbx_core::scheduled_backup::worker_runtime().expect("Failed to build tokio runtime");
     let runtime_handle = runtime.handle().clone();
     let _runtime = Box::leak(Box::new(runtime));
     tauri::async_runtime::set(runtime_handle);

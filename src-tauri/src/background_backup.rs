@@ -351,7 +351,7 @@ pub fn run_if_requested() -> bool {
             return Ok(());
         }
         worker_logging(&dir)?;
-        let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().map_err(|e| e.to_string())?;
+        let runtime = dbx_core::scheduled_backup::worker_runtime().map_err(|e| e.to_string())?;
         let result = runtime.block_on(async {
             let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
             dbx_core::sql_dialect::dialect_loader::register_core_dialects();
