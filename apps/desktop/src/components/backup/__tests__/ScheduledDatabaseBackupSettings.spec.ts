@@ -40,8 +40,12 @@ vi.mock("@/stores/connectionStore", () => ({
     ensureConnected: mocks.ensureConnected,
     recordConnectionLostError: mocks.recordConnectionLostError,
     getConfig: (connectionId: string) => mocks.connections.find((connection) => connection.id === connectionId),
-    get sqlFileSource() { return mocks.sqlFileSource; },
-    set sqlFileSource(value) { mocks.sqlFileSource = value; },
+    get sqlFileSource() {
+      return mocks.sqlFileSource;
+    },
+    set sqlFileSource(value) {
+      mocks.sqlFileSource = value;
+    },
   }),
 }));
 vi.mock("@/lib/backend/tauriRuntime", () => ({ isTauriRuntime: () => mocks.desktop }));
@@ -308,8 +312,13 @@ describe("ScheduledDatabaseBackupSettings schedule dialog", () => {
     const preview = { fileName: "backup.sql", filePath: "/server/tmp/sql_file/restore-token/backup.sql", preview: "SELECT 1;", sizeBytes: 9, canExecuteWithoutSelectedDatabase: true, cleanupToken: "restore-token" };
     mocks.prepareDatabaseBackupRestore.mockResolvedValue(preview);
     mocks.runs.push({
-      id: "restore-run", scheduleName: "Nightly", connectionId: "mysql-1", trigger: "manual",
-      source: "scheduled", status: "success", startedAt: "2026-08-18T00:00:00.000Z",
+      id: "restore-run",
+      scheduleName: "Nightly",
+      connectionId: "mysql-1",
+      trigger: "manual",
+      source: "scheduled",
+      status: "success",
+      startedAt: "2026-08-18T00:00:00.000Z",
       files: [{ displayName: "backup.sql", filePath: "/backups/backup.sql", database: "app" }],
     });
     await mountSettings();

@@ -21,11 +21,21 @@ vi.mock("@/composables/useToast", () => ({ useToast: () => ({ toast: vi.fn() }) 
 import { useDialogSources } from "@/composables/useDialogSources";
 
 let app: App | undefined;
-afterEach(() => { app?.unmount(); document.body.innerHTML = ""; });
+afterEach(() => {
+  app?.unmount();
+  document.body.innerHTML = "";
+});
 
 it("hands prepared Web previews to the dialog, clears them on close, and preserves desktop paths", async () => {
   let dialogs!: ReturnType<typeof useDialogSources>;
-  app = createApp(defineComponent({ setup() { dialogs = useDialogSources(); return () => h("div"); } }));
+  app = createApp(
+    defineComponent({
+      setup() {
+        dialogs = useDialogSources();
+        return () => h("div");
+      },
+    }),
+  );
   app.mount(document.body.appendChild(document.createElement("div")));
   const preview = { fileName: "backup.sql", filePath: "/server/tmp/sql_file/restore-token/backup.sql", preview: "SELECT 1;", sizeBytes: 9, canExecuteWithoutSelectedDatabase: true, cleanupToken: "restore-token" };
   mocks.store.sqlFileSource = { connectionId: "mysql", database: "app", preview };

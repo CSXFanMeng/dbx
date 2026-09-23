@@ -261,8 +261,11 @@ describe("SqlFileExecutionDialog retries", () => {
   async function mountRestoredPreview() {
     mocks.desktop = false;
     const preview = {
-      fileName: "backup.sql", filePath: "/server/tmp/sql_file/restore-token/backup.sql",
-      preview: "SELECT 42;", sizeBytes: 10, canExecuteWithoutSelectedDatabase: true,
+      fileName: "backup.sql",
+      filePath: "/server/tmp/sql_file/restore-token/backup.sql",
+      preview: "SELECT 42;",
+      sizeBytes: 10,
+      canExecuteWithoutSelectedDatabase: true,
       cleanupToken: "restore-token",
     };
     root = document.createElement("div");

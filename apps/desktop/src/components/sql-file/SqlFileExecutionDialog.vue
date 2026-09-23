@@ -489,7 +489,7 @@ async function loadPreviews(filesOrPaths: Array<string | File>) {
 }
 
 async function releaseManagedPreviews() {
-  const tokens = previews.value.flatMap((preview) => preview.cleanupToken ? [preview.cleanupToken] : []);
+  const tokens = previews.value.flatMap((preview) => (preview.cleanupToken ? [preview.cleanupToken] : []));
   if (!tokens.length) return;
   previews.value = previews.value.filter((preview) => !preview.cleanupToken);
   try {
