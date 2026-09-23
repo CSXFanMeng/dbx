@@ -230,6 +230,46 @@ async fn draining_transfers_leadership_without_cancelling_and_cancel_survives_re
 }
 
 #[tokio::test]
+async fn worker_waits_for_security_migration_and_resumes_without_restarting() {
+    let directory = tempfile::tempdir().unwrap();
+    let legacy_path = directory.path().join("connections.json");
+    std::fs::write(&legacy_path, "[]").unwrap();
+    let storage = crate::storage::Storage::open_unmigrated(&directory.path().join("dbx.db")).await.unwrap();
+    let service = BackupService::new(Arc::new(crate::connection::AppState::new(storage)), directory.path(), None);
+    let queued = service.store.enqueue(request(schedule(directory.path()).config)).await.unwrap();
+    assert!(!service.state.storage.inspect_data_migration().await.unwrap().is_ready());
+    let stop = CancellationToken::new();
+    let worker = service.start(stop.clone());
+
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    let waiting = service.store.snapshot().await.unwrap();
+    assert!(waiting.heartbeat.is_none());
+    assert_eq!(waiting.runs[0].id, queued.id);
+    assert_eq!(waiting.runs[0].status, queued.status);
+    assert_eq!(std::fs::read_to_string(&legacy_path).unwrap(), "[]");
+    assert!(!directory.path().join("connections.json.bak").exists());
+
+    service.state.storage.start_data_migration().await.unwrap();
+    let resumed = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let snapshot = service.store.snapshot().await.unwrap();
+            if snapshot.heartbeat.is_some() && snapshot.runs[0].status == "failed" {
+                break snapshot;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    stop.cancel();
+    tokio::time::timeout(Duration::from_secs(5), worker).await.unwrap().unwrap();
+    let resumed = resumed.unwrap();
+    assert_eq!(resumed.runs[0].id, queued.id);
+    assert!(resumed.runs[0].error.is_some());
+    assert!(!legacy_path.exists());
+    assert!(directory.path().join("connections.json.bak").exists());
+}
+
+#[tokio::test]
 async fn stopped_or_drained_startup_does_not_consume_existing_jobs() {
     let dir = tempfile::tempdir().unwrap();
     let service = service(dir.path(), None).await;

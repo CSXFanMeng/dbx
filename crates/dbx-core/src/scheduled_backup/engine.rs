@@ -14,8 +14,18 @@ use crate::{
 impl BackupService {
     pub(crate) async fn serve(&self, stop: CancellationToken, drain: CancellationToken) {
         let mut leader = None;
+        let mut migration_ready = false;
         while !stop.is_cancelled() && !drain.is_cancelled() {
-            if leader.is_none() {
+            if !migration_ready {
+                migration_ready = match self.state.storage.inspect_data_migration().await {
+                    Ok(status) => status.is_ready(),
+                    Err(error) => {
+                        log::warn!("[database-backup] waiting for data migration: {error}");
+                        false
+                    }
+                };
+            }
+            if migration_ready && leader.is_none() {
                 let acquired = std::fs::create_dir_all(&self.store.directory)
                     .and_then(|_| {
                         OpenOptions::new()
@@ -34,7 +44,7 @@ impl BackupService {
                     }
                 }
             }
-            if leader.is_some() && !drain.is_cancelled() {
+            if migration_ready && leader.is_some() && !drain.is_cancelled() {
                 if let Err(error) = self.tick(&stop).await {
                     log::error!("[database-backup] scheduler failed: {error}");
                 }
