@@ -85,11 +85,15 @@ impl BackgroundBackup {
     }
 
     pub fn resume(&self) -> Result<(), String> {
-        if marker(&self.data_dir).exists() {
-            register(&self.data_dir)?;
-        }
-        Ok(())
+        resume_registration(&self.data_dir, register)
     }
+}
+
+fn resume_registration(data_dir: &Path, register: impl FnOnce(&Path) -> Result<(), String>) -> Result<(), String> {
+    if marker(data_dir).exists() {
+        register(data_dir)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -303,15 +307,20 @@ fn unit_path(data_dir: &Path) -> Result<PathBuf, String> {
     Ok(config.join("systemd/user").join(format!("{}.service", name(data_dir))))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 fn systemd_arg(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"").replace('%', "%%").replace('$', "$$"))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn service_executable(env: &tauri::Env) -> Result<PathBuf, String> {
+    tauri::process::current_binary(env).map_err(|error| error.to_string())
 }
 
 #[cfg(target_os = "linux")]
 fn register(data_dir: &Path) -> Result<(), String> {
     let path = unit_path(data_dir)?;
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let exe = service_executable(&tauri::Env::default())?;
     if data_dir.to_string_lossy().chars().chain(exe.to_string_lossy().chars()).any(char::is_control) {
         return Err("Service paths contain control characters".into());
     }
@@ -320,6 +329,23 @@ fn register(data_dir: &Path) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| e.to_string())?;
     run(Command::new("systemctl").args(["--user", "daemon-reload"]))?;
     run(Command::new("systemctl").args(["--user", "enable", "--now", &format!("{}.service", name(data_dir))]))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum WorkerAction {
+    Continue,
+    Drain,
+    Stop,
+}
+
+fn worker_action(managed: bool, ui: bool, ui_alive: bool, enabled: bool) -> WorkerAction {
+    if ui && !ui_alive && enabled {
+        WorkerAction::Drain
+    } else if (managed || ui) && !enabled && !(ui && ui_alive) {
+        WorkerAction::Stop
+    } else {
+        WorkerAction::Continue
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -371,8 +397,11 @@ pub fn run_if_requested() -> bool {
                         if worker.is_finished() { break; }
                         let ui_alive = lease.as_ref().and_then(|p| std::fs::metadata(p).ok()).and_then(|m| m.modified().ok())
                             .and_then(|time| time.elapsed().ok()).is_some_and(|age| age < Duration::from_secs(10));
-                        if ui && !ui_alive && marker(&dir).exists() { drain.cancel(); }
-                        if (managed || ui) && !marker(&dir).exists() && !(ui && ui_alive) { break; }
+                        match worker_action(managed, ui, ui_alive, marker(&dir).exists()) {
+                            WorkerAction::Drain => drain.cancel(),
+                            WorkerAction::Stop => break,
+                            WorkerAction::Continue => {}
+                        }
                     }
                 }
             }
@@ -391,4 +420,96 @@ pub fn run_if_requested() -> bool {
         std::process::exit(1);
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_service_uses_the_current_binary() {
+        let mut env = tauri::Env::default();
+        env.args_os.clear();
+        #[cfg(target_os = "linux")]
+        {
+            env.appimage = None;
+            env.appdir = None;
+        }
+        assert_eq!(service_executable(&env).unwrap(), std::env::current_exe().unwrap().canonicalize().unwrap());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn appimage_service_uses_the_persistent_outer_launcher() {
+        let mut env = tauri::Env::default();
+        env.appimage = Some("/home/user/DBX new%build.AppImage".into());
+        env.appdir = Some("/tmp/.mount_DBX123".into());
+        env.args_os.clear();
+        let executable = service_executable(&env).unwrap();
+        assert_eq!(executable, PathBuf::from("/home/user/DBX new%build.AppImage"));
+        assert_eq!(systemd_arg(&executable.to_string_lossy()), "\"/home/user/DBX new%%build.AppImage\"");
+    }
+
+    #[test]
+    fn service_arguments_preserve_spaces_and_escape_systemd_expansion() {
+        assert_eq!(systemd_arg("/home/user/DBX $next%build.AppImage"), "\"/home/user/DBX $$next%%build.AppImage\"");
+    }
+
+    #[test]
+    fn worker_exit_and_restart_decisions_preserve_foreground_and_managed_jobs() {
+        assert_eq!(worker_action(false, true, true, false), WorkerAction::Continue);
+        assert_eq!(worker_action(false, true, false, false), WorkerAction::Stop);
+        assert_eq!(worker_action(false, true, false, true), WorkerAction::Drain);
+        assert_eq!(worker_action(false, true, true, true), WorkerAction::Continue);
+        assert_eq!(worker_action(true, false, false, true), WorkerAction::Continue);
+        assert_eq!(worker_action(true, false, false, false), WorkerAction::Stop);
+        assert_eq!(worker_action(false, false, false, false), WorkerAction::Continue);
+    }
+
+    #[test]
+    fn restart_registration_respects_the_off_state_and_preserves_enabled_state_on_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        resume_registration(directory.path(), |_| panic!("disabled service must not register")).unwrap();
+        std::fs::create_dir_all(directory.path().join("database-backups")).unwrap();
+        std::fs::write(marker(directory.path()), b"1").unwrap();
+        let mut registrations = 0;
+        resume_registration(directory.path(), |data_dir| {
+            assert_eq!(data_dir, directory.path());
+            registrations += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(registrations, 1);
+        assert!(resume_registration(directory.path(), |_| Err("upgrade registration failed".into())).is_err());
+        assert!(marker(directory.path()).exists());
+    }
+
+    #[tokio::test]
+    async fn shutdown_stops_the_mock_supervisor_and_removes_only_its_lease() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(&directory.path().join("dbx.db")).await.unwrap();
+        let state = Arc::new(AppState::new(storage));
+        std::fs::create_dir_all(directory.path().join("database-backups")).unwrap();
+        std::fs::write(marker(directory.path()), b"1").unwrap();
+        let lease = directory.path().join("database-backups/ui-test.lease");
+        std::fs::write(&lease, b"1").unwrap();
+        let stop = CancellationToken::new();
+        let supervisor_stop = stop.clone();
+        let worker = tokio::spawn(async move {
+            supervisor_stop.cancelled().await;
+        });
+        let backup = BackgroundBackup {
+            service: BackupService::new(state, directory.path(), None),
+            data_dir: directory.path().to_path_buf(),
+            stop: stop.clone(),
+            worker: tokio::sync::Mutex::new(Some(worker)),
+            lease: lease.clone(),
+        };
+        tokio::time::timeout(Duration::from_secs(2), backup.shutdown()).await.unwrap();
+        backup.shutdown().await;
+        assert!(stop.is_cancelled());
+        assert!(backup.worker.lock().await.is_none());
+        assert!(!lease.exists());
+        assert!(marker(directory.path()).exists());
+    }
 }

@@ -18,7 +18,7 @@ export async function downloadDatabaseBackupFile(runId: string, index: number): 
   anchor.click();
 }
 
-export function prepareDatabaseBackupRestore(runId: string, index: number): Promise<string> {
+export function prepareDatabaseBackupRestore(runId: string, index: number): Promise<SqlFilePreview> {
   return post(`/api/database-backups/${encodeURIComponent(runId)}/files/${index}/restore`, {});
 }
 import type {
@@ -2538,6 +2538,10 @@ export async function previewSqlFile(fileOrPath: string | File): Promise<SqlFile
   });
   if (!res.ok) throw await backendResponseError(res);
   return res.json();
+}
+
+export async function releaseSqlFilePreview(cleanupToken: string): Promise<void> {
+  return post("/api/sql-file/preview/release", { cleanupToken });
 }
 
 export async function executeSqlFile(request: SqlFileRequest): Promise<void> {

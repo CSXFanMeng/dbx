@@ -16,7 +16,7 @@ export async function downloadDatabaseBackupFile(_runId: string, _index: number)
   throw new Error("Use the file manager to access desktop backup files");
 }
 
-export function prepareDatabaseBackupRestore(id: string, index: number): Promise<string> {
+export function prepareDatabaseBackupRestore(id: string, index: number): Promise<string | SqlFilePreview> {
   return invoke("database_backup_command", { command: { action: "file", id, index } });
 }
 import { assertUpdateAllowsCommand } from "@/lib/app/updatePreparation";
@@ -5027,7 +5027,10 @@ export interface SqlFilePreview {
   establishesDatabaseContext?: boolean;
   packageFilePaths?: string[];
   packagePartCount?: number;
+  cleanupToken?: string;
 }
+
+export async function releaseSqlFilePreview(_cleanupToken: string): Promise<void> {}
 
 export interface SqlFileProgress {
   executionId: string;

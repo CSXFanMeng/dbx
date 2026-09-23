@@ -364,6 +364,7 @@ async fn serve() {
         transfer_progress_channels: RwLock::new(HashMap::new()),
         table_import_channels: RwLock::new(HashMap::new()),
         sql_file_executions: RwLock::new(HashMap::new()),
+        managed_sql_previews: Default::default(),
         nacos_imports: RwLock::new(HashMap::new()),
         login_rate_limit: tokio::sync::Mutex::new(state::LoginRateLimit { fail_count: 0, locked_until: None }),
         export_files: RwLock::new(HashMap::new()),
@@ -371,6 +372,7 @@ async fn serve() {
     });
 
     ssh_prompt::install_web_ssh_prompt_bridge(web_state.ssh_prompts.clone());
+    routes::sql_file::start_sql_file_cleanup(&web_state);
 
     let backup_root = std::env::var_os("DBX_BACKUP_ROOT")
         .map(std::path::PathBuf::from)
@@ -1113,6 +1115,7 @@ async fn serve() {
                 .layer(DefaultBodyLimit::max(routes::sql_file::sql_file_upload_hard_cap_bytes())),
         )
         .route("/sql-file/execute", post(routes::sql_file::execute_sql_file))
+        .route("/sql-file/preview/release", post(routes::sql_file::release_sql_file_preview))
         .route("/sql-file/tables", post(routes::sql_file::inspect_sql_file_tables))
         .route("/sql-file/progress/{executionId}", get(routes::sql_file::sql_file_progress))
         .route("/sql-file/cancel", post(routes::sql_file::cancel_sql_file))

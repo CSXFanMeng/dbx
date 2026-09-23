@@ -159,6 +159,7 @@ async fn deletion_only_removes_recorded_files_within_the_backup_root() {
         owned: true,
     }];
     service.store.finish(run.clone()).await.unwrap();
+    assert!(service.file(&run.id, 0).await.is_err());
     assert!(service.delete_runs(vec![run.id.clone()]).await.is_err());
     assert!(outside.exists());
     assert!(inside.exists());
@@ -169,6 +170,9 @@ async fn deletion_only_removes_recorded_files_within_the_backup_root() {
     assert!(inside.exists());
     run.files[0].owned = true;
     service.store.finish(run.clone()).await.unwrap();
+    assert_eq!(service.file(&run.id, 0).await.unwrap(), inside.canonicalize().unwrap());
+    assert!(service.file(&run.id, 1).await.is_err());
+    assert!(service.file("unknown", 0).await.is_err());
     service.delete_runs(vec![run.id]).await.unwrap();
     assert!(!inside.exists());
     assert!(outside.exists());
@@ -223,6 +227,55 @@ async fn draining_transfers_leadership_without_cancelling_and_cancel_survives_re
     let snapshot = BackupStore::new(dir.path()).snapshot().await.unwrap();
     assert_eq!(snapshot.runs.len(), 1);
     assert_eq!(snapshot.runs[0].status, "cancelled");
+}
+
+#[tokio::test]
+async fn stopped_or_drained_startup_does_not_consume_existing_jobs() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = service(dir.path(), None).await;
+    let queued = service.store.enqueue(request(schedule(dir.path()).config)).await.unwrap();
+    for draining in [false, true] {
+        let stop = CancellationToken::new();
+        let drain = CancellationToken::new();
+        if draining {
+            drain.cancel();
+        } else {
+            stop.cancel();
+        }
+        tokio::time::timeout(Duration::from_secs(5), service.start_with_drain(stop, drain)).await.unwrap().unwrap();
+        let snapshot = service.store.snapshot().await.unwrap();
+        assert!(snapshot.heartbeat.is_none());
+        assert_eq!(snapshot.runs.len(), 1);
+        assert_eq!(snapshot.runs[0].id, queued.id);
+        assert_eq!(snapshot.runs[0].status, queued.status);
+    }
+    assert_eq!(service.store.claim().await.unwrap().unwrap().run.id, queued.id);
+}
+
+#[tokio::test]
+async fn upgrade_reopen_recovers_interrupted_work_without_losing_queued_jobs_or_disabled_schedules() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = BackupStore::new(dir.path());
+    let mut disabled = schedule(dir.path());
+    disabled.enabled = false;
+    store.save_schedule(disabled).await.unwrap();
+    let interrupted = store.enqueue(request(schedule(dir.path()).config)).await.unwrap();
+    assert_eq!(store.claim().await.unwrap().unwrap().run.id, interrupted.id);
+    let queued = store.enqueue(request(schedule(dir.path()).config)).await.unwrap();
+    let cancelled = store.enqueue(request(schedule(dir.path()).config)).await.unwrap();
+    store.cancel(cancelled.id.clone()).await.unwrap();
+    drop(store);
+
+    let reopened = BackupStore::new(dir.path());
+    reopened.recover().await.unwrap();
+    reopened.recover().await.unwrap();
+    let snapshot = reopened.snapshot().await.unwrap();
+    assert!(!snapshot.schedules[0].enabled);
+    assert_eq!(snapshot.runs.len(), 3);
+    assert_eq!(snapshot.runs.iter().find(|run| run.id == interrupted.id).unwrap().status, "failed");
+    assert_eq!(snapshot.runs.iter().find(|run| run.id == cancelled.id).unwrap().status, "cancelled");
+    assert_eq!(reopened.claim().await.unwrap().unwrap().run.id, queued.id);
+    assert!(reopened.claim().await.unwrap().is_none());
 }
 
 #[test]

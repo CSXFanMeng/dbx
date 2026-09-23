@@ -42,13 +42,7 @@ pub async fn download(
 pub async fn prepare_restore(
     State(state): State<Arc<WebState>>,
     Path((id, index)): Path<(String, usize)>,
-) -> Result<Json<String>, AppError> {
+) -> Result<Json<serde_json::Value>, AppError> {
     let source = service(&state)?.file(&id, index).await?;
-    let tmp = state.data_dir.join("tmp");
-    tokio::fs::create_dir_all(&tmp).await.map_err(|e| AppError::from(e.to_string()))?;
-    let target =
-        super::sql_file::safe_uploaded_sql_path(&tmp, &source.file_name().unwrap_or_default().to_string_lossy())?;
-    // Use the existing uploaded-SQL sandbox. Restoring never edits the original backup.
-    tokio::fs::copy(&source, &target).await.map_err(|e| AppError::from(e.to_string()))?;
-    Ok(Json(target.to_string_lossy().into_owned()))
+    Ok(Json(super::sql_file::prepare_backup_preview(&state, source).await?))
 }

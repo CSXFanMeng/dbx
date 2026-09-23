@@ -624,10 +624,11 @@ async function revealBackup(file: DatabaseBackupFile) {
 
 async function restoreBackup(run: DatabaseBackupRun, file: DatabaseBackupFile) {
   try {
+    const prepared = desktop ? file.filePath : await api.prepareDatabaseBackupRestore(run.id, run.files.indexOf(file));
     connectionStore.sqlFileSource = {
       connectionId: run.connectionId,
       database: file.database,
-      filePath: desktop ? file.filePath : await api.prepareDatabaseBackupRestore(run.id, run.files.indexOf(file)),
+      ...(typeof prepared === "string" ? { filePath: prepared } : { preview: prepared }),
     };
   } catch (error) {
     toast(String(error), 5000);
