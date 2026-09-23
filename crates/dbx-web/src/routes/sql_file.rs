@@ -224,7 +224,7 @@ async fn preview_uploaded_sql_file(
 
     if file_name.to_ascii_lowercase().ends_with(".zip") {
         let extraction_dir = tmp_dir.join(format!("package-{}", Uuid::new_v4()));
-        let package = dbx_core::sql_file_zip_package::extract_sql_file_zip_package(&file_path, &extraction_dir)
+        let package = dbx_core::sql_file_zip_package::extract_sql_file_zip_package(file_path, &extraction_dir)
             .map_err(AppError::from)?;
         let paths = dbx_core::sql_file_zip_package::extracted_sql_zip_paths(&extraction_dir, &package)
             .into_iter()
@@ -247,7 +247,7 @@ async fn preview_uploaded_sql_file(
     }
 
     let content =
-        dbx_core::sql_file_import::read_sql_file_preview(&file_path, 1_000_000).await.map_err(AppError::from)?;
+        dbx_core::sql_file_import::read_sql_file_preview(file_path, 1_000_000).await.map_err(AppError::from)?;
     let preview: String = content.chars().take(20_000).collect();
     let bootstrap_analysis = dbx_core::sql_file_import::mysql_like_sql_file_bootstrap_analysis(&content);
 
