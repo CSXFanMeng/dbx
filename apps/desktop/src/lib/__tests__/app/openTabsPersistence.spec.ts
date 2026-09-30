@@ -30,11 +30,14 @@ describe("openTabsPersistence originalSql round-trip", () => {
           { ...base, id: "ordinary", connectionId: "test" },
           { ...base, id: "multi", connectionId: "editor", multiDbExecution: { kind: "multi-db", batchId: "batch", target: { connectionId: "production", database: "app" }, status: "success" } },
           { ...base, id: "legacy" },
+          { ...base, id: "explicit-undefined", connectionId: undefined },
         ],
       }),
     ]);
     expect(restored.connectionId).toBe("editor");
-    expect(restored.resultRuns?.map((run) => run.connectionId)).toEqual(["test", "production", undefined]);
+    expect(restored.resultRuns?.map((run) => run.connectionId)).toEqual(["test", "production", undefined, undefined]);
+    expect(restored.resultRuns?.[2]).not.toHaveProperty("connectionId");
+    expect(restored.resultRuns?.[3]).not.toHaveProperty("connectionId");
   });
 
   it("preserves per-tab output view state across a round-trip", () => {
