@@ -6,6 +6,7 @@ export const ACTIVE_TAB_STORAGE_KEY = "dbx-active-tab";
 
 export interface SavedQueryResultRun {
   id: string;
+  connectionId?: string;
   title: string;
   sequence: number;
   sql: string;
@@ -227,6 +228,7 @@ export function serializeOpenTabs(tabs: QueryTab[]): SavedOpenTab[] {
       ? {
           resultRuns: tab.resultRuns.map((run) => ({
             id: run.id,
+            connectionId: run.multiDbExecution?.kind === "multi-db" ? run.multiDbExecution.target.connectionId : run.connectionId,
             title: run.title,
             sequence: run.sequence,
             sql: run.sql,
