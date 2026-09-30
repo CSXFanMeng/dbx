@@ -224,7 +224,7 @@ export function serializeOpenTabs(tabs: QueryTab[]): SavedOpenTab[] {
       ? {
           resultRuns: tab.resultRuns.map((run) => ({
             id: run.id,
-            connectionId: run.multiDbExecution?.kind === "multi-db" ? run.multiDbExecution.target.connectionId : run.connectionId,
+            ...(run.multiDbExecution?.kind === "multi-db" ? { connectionId: run.multiDbExecution.target.connectionId } : run.connectionId !== undefined ? { connectionId: run.connectionId } : {}),
             title: run.title,
             sequence: run.sequence,
             sql: run.sql,
