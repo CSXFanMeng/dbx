@@ -129,6 +129,13 @@ export interface ConnectionConfig {
   client_key_path?: string;
   sysdba?: boolean;
   oracle_connection_type?: "service_name" | "sid" | "tns";
+  /** Connection-level NLS_LANG override; empty follows the global default. */
+  oracle_oci_nls_lang?: string;
+  /**
+   * Connection-level TNS_ADMIN override for OCI (tnsnames.ora / sqlnet.ora /
+   * wallet directory); empty follows the global default.
+   */
+  oracle_oci_tns_admin?: string;
   connection_string?: string;
   jdbc_driver_class?: string;
   jdbc_driver_paths?: string[];
@@ -1263,6 +1270,8 @@ export type QueryResultSourceLabelKind = "source" | "comment";
 
 export interface QueryResult {
   columns: string[];
+  /** Typed Neo4j node properties; source columns remain unchanged for paging. */
+  neo4j_node_cells?: import("@/lib/neo4j/neo4jNodeResult").Neo4jNodeCell[];
   /** One SRID per geometry/geography column (first non-null observed). */
   spatial_columns?: SpatialColumn[];
   /**
@@ -1941,6 +1950,12 @@ export interface QueryTab {
   resultLocalSortOriginalMongoDocuments?: QueryResult["mongo_documents"];
   resultLocalSortOriginalMongoCopyDocuments?: QueryResult["mongo_copy_documents"];
   orderByInput?: string;
+  /**
+   * Structured (sort builder) ORDER BY applied on top of `orderByInput`. Kept as
+   * a sibling field so the manual input stays editable while store-side SQL
+   * rebuilds (refresh/export/restore) still reproduce the composite sort.
+   */
+  structuredOrderByInput?: string;
   resultPageSql?: string;
   resultPageLimit?: number;
   resultPageOffset?: number;
