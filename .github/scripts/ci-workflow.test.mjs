@@ -66,6 +66,12 @@ test("frontend tests use two shards on separate runners", () => {
   assert.doesNotMatch(job("frontend-typecheck"), /vitest|oxfmt|oxlint/);
 });
 
+test("frontend type checking has a dedicated heap budget without changing other frontend jobs", () => {
+  const content = job("frontend-typecheck");
+  assert.match(content, /name: Type-check frontend\s+env:\s+NODE_OPTIONS: --max-old-space-size=6144\s+run: pnpm exec vue-tsc --noEmit --project apps\/desktop\/tsconfig\.json/);
+  for (const name of ["frontend-checks", "frontend-test"]) assert.doesNotMatch(job(name), /NODE_OPTIONS:/);
+});
+
 test("every old Agent stage has an independent owner and Java packaging remains strict", () => {
   assert.ok(job("agent-checks").includes("python3 -m unittest discover"));
   assert.ok(job("agent-checks").includes("python3 scripts/validate_agents.py"));
