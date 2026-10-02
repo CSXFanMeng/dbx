@@ -582,6 +582,8 @@ export default withEnglishFallback({
     sortByDate: "Dəyişiklik tarixinə görə sırala",
     sortByFolder: "Qovluq quruluşuna görə sırala",
     collapseAll: "Hamısını yığ",
+    moreMatches: "+ {count} uyğunluq daha",
+    collapseMatches: "Yığ",
   },
 
   connection: {
@@ -3420,6 +3422,8 @@ export default withEnglishFallback({
     templateSelectorDeselectAll: "Bütün seçimləri ləğv et",
     templateSelectorLoading: "Yüklənir...",
     skillsEntry: "Skills",
+    skillsSelectAll: "Hamısını seç",
+    skillsDeselectAll: "Bütün seçimləri ləğv et",
     skillsLoading: "Skills yüklənir…",
     skillsEmpty: "Hələ skill tapılmadı",
     skillsRefresh: "Siyahını yenilə",
@@ -4208,6 +4212,10 @@ export default withEnglishFallback({
     },
   },
   userAdmin: {
+    oldPassword: "Cari parol (istəyə bağlı)",
+    oldPasswordHint: "Vastbase-də ilkin istifadəçidən başqa öz parolunuzu dəyişmək üçün cari parol tələb olunur. Başqa istifadəçinin parolunu səlahiyyətlə sıfırlayarkən boş buraxıla bilər.",
+    passwordChangedReconnect: "Parol dəyişdirildi. Bu bağlantı kəsildi və köhnə parol silindi. Bağlantı parametrlərində Saxla və qoşul seçimini istifadə edib yeni parolu daxil edin.",
+    passwordChangedCleanupFailed: "Parol dəyişdirildi, lakin bağlantının təmizlənməsi uğursuz oldu. Avtomatik yenidən qoşulma bloklanıb. DBX-i yenidən başlatmazdan əvvəl bu bağlantını redaktə edib köhnə parolu silin.",
     title: "İstifadəçilər və səlahiyyətlər",
     unsupported: "MySQL və PostgreSQL ilə uyğun əlaqələr dəstəklənir. SQL Server, Oracle və digər icazə modelləri sonradan əlavə edilə bilər.",
     newUser: "Yeni istifadəçi",
@@ -7997,6 +8005,8 @@ export default withEnglishFallback({
     shortcutScopeHintSearch: "Axtarış sahəsi fokusda olduqda keçərlidir",
     shortcutScopeHintSidebar: "Yan panel fokusda olduqda keçərlidir",
     shortcutGroupCount: "{count} əməliyyat",
+    shortcutGroupCollapse: "Qrupu yığ",
+    shortcutGroupExpand: "Qrupu genişləndir",
     shortcutGroupUnbound: "{count} təyin edilməyib",
     shortcutGroupUnboundTooltip: "Bu əməliyyatlara qısayol təyin edilməyib; sətirdəki karandaş ikonundan istifadə edərək təyin edin.",
     shortcutModifiedTag: "Dəyişdirilib",

@@ -57,7 +57,7 @@ import { createColumnReferencePayload, tableReferenceInsertText } from "@/lib/ed
 import { clearRememberedFocusedQueryEditorView, focusedQueryEditorView, queryEditorInsertContext, registerQueryEditorInsertContext, rememberFocusedQueryEditorView, unregisterQueryEditorInsertContext } from "@/lib/editor/focusedQueryEditorView";
 import { loadObjectMetadataFacet } from "@/lib/metadata/objectMetadataCache";
 import { structurePeekPanelId } from "@/lib/editor/structurePeekPanel";
-import { parkEditorNativeSelection, type EditorNativeSelectionPark } from "@/lib/editor/queryEditorNativeSelection";
+import { createQueryEditorNativeSelectionGuard, parkEditorNativeSelection, type EditorNativeSelectionPark } from "@/lib/editor/queryEditorNativeSelection";
 import CodeSnapshotDialog from "@/components/codeSnapshot/CodeSnapshotDialog.vue";
 import QueryEditorContextMenu, { type QueryEditorContextMenuState, type QueryEditorContextMenuActions } from "./QueryEditorContextMenu.vue";
 
@@ -134,6 +134,7 @@ import { supportsQueryEditorBlockComments, supportsSqlInListPaste } from "@/lib/
 import { queryContextObjectRoute, queryTableCandidateAtSqlPosition, resolveQueryContextCandidateDatabase, resolveQueryContextObjectTarget, type QueryContextObjectAction } from "@/lib/sql/queryCursorTableTarget";
 import * as api from "@/lib/backend/api";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
+import { isMacOS } from "@/lib/backend/platform";
 import { resolveSqlDialectId } from "@/lib/sql/semantic/dialect";
 import type { SqlCompletionColumn, SqlCompletionContext, SqlCompletionReferencedTable } from "@/lib/sql/sqlCompletion";
 
@@ -1929,6 +1930,7 @@ const codeMirrorLifecycle = useQueryEditorCodeMirror({
         // keystroke maps the boundary view to the new doc before any lineMarker
         // callback reads it, otherwise the gutter would trigger a full parse.
         statementBoundariesTrackingPlugin,
+        createQueryEditorNativeSelectionGuard(ViewPlugin, { enabled: isTauriRuntime() && isMacOS(), inputHandler: EditorView.inputHandler, finalizeClipboardText: (text) => clipboardLineEndings(text) }),
         initializedRuntime.runGutterComp.of(runStatementGutterExtension()),
         initializedRuntime.lineNumbersComp.of(lineNumbersExtension(initialSettings.showLineNumbers)),
         createQueryEditorLineNumberAlignmentExtension(ViewPlugin),
@@ -2809,18 +2811,35 @@ defineExpose({
   contain: size layout style;
 }
 
+/* Matches the geometry of the custom-drawn data grid scrollbars (DataGrid.vue):
+   a fixed 10px track with a 4px visual thumb widening on hover/drag, transparent
+   track, capsule thumb, colors from the same --foreground color-mix. The thin
+   idle look comes from a transparent border (background-clip: padding-box);
+   hover drops the border to fill the full track. Partial border widths are not
+   honored on scrollbar part state changes, so the hover endpoint is the full
+   10px track rather than the grid's 6px. Changing the track width on hover
+   would squeeze the content and cause a reflow flicker, so it stays constant. */
 [data-query-editor-root] :deep(.cm-scroller::-webkit-scrollbar) {
-  width: 5px;
-  height: 5px;
+  width: 10px;
+  height: 10px;
 }
 
-[data-query-editor-root] :deep(.cm-scroller::-webkit-scrollbar-track) {
-  background: rgba(127, 127, 127, 0.1);
+[data-query-editor-root] :deep(.cm-scroller::-webkit-scrollbar-track),
+[data-query-editor-root] :deep(.cm-scroller::-webkit-scrollbar-corner) {
+  background: transparent;
 }
 
 [data-query-editor-root] :deep(.cm-scroller::-webkit-scrollbar-thumb) {
-  background: rgba(127, 127, 127, 0.7);
+  background: color-mix(in oklch, var(--foreground) 30%, transparent);
+  background-clip: padding-box;
+  border: 3px solid transparent;
   border-radius: 999px;
+}
+
+[data-query-editor-root] :deep(.cm-scroller::-webkit-scrollbar-thumb:hover),
+[data-query-editor-root] :deep(.cm-scroller::-webkit-scrollbar-thumb:active) {
+  background: color-mix(in oklch, var(--foreground) 48%, transparent);
+  border: 0 solid transparent;
 }
 
 @supports not selector(::-webkit-scrollbar) {

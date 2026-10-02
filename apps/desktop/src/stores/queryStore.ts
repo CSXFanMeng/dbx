@@ -212,8 +212,9 @@ interface BuildQueryResultExportRequestOptions {
   insertMode?: SqlInsertMode;
 }
 
-interface OpenSavedSqlOptions {
+export interface OpenSavedSqlOptions {
   targetMode?: SavedSqlOpenTargetMode;
+  reveal?: { line: number; column?: number };
 }
 
 interface OpenObjectSourceTabOptions {
@@ -5435,6 +5436,9 @@ export const useQueryStore = defineStore("query", () => {
         existing.editorViewport = restored.viewport;
       }
       applySavedSqlExecutionTarget(existing, target);
+      if (options.reveal) {
+        existing.editorRevealRequest = { id: ++contentRevealSeq, line: options.reveal.line, column: options.reveal.column };
+      }
       switchTab(existing.id);
       return existing.id;
     }
@@ -5458,6 +5462,7 @@ export const useQueryStore = defineStore("query", () => {
       isExplaining: false,
       mode: "query",
       autoCommit: defaultAutoCommitForDbTypeWithSetting(dbType),
+      editorRevealRequest: options.reveal ? { id: ++contentRevealSeq, line: options.reveal.line, column: options.reveal.column } : undefined,
       editorSelection: restoredPosition.selection,
       editorViewport: restoredPosition.viewport,
     };

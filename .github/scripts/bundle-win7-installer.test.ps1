@@ -36,7 +36,7 @@ try {
         Assert-True ($global:DbxBundleTestState.Attempts -eq ($failures + 1)) 'Unexpected retry count'
         Assert-True ($hash.Algorithm -eq 'SHA256' -and $hash.Hash.Length -eq 64) 'Installer hash missing'
         foreach ($command in $global:DbxBundleTestState.Commands) {
-            Assert-True ($command -eq 'tauri bundle --bundles nsis --target x86_64-win7-windows-msvc --config src-tauri/tauri.webview2-win7-fixed.conf.json') 'Bundle command changed'
+            Assert-True ($command -eq 'tauri bundle --bundles nsis --target x86_64-win7-windows-msvc --config src-tauri/tauri.webview2-win7-fixed.conf.json --config .github/fixtures/win7-nsis-zlib-config.json') 'Bundle command changed'
         }
     }
 

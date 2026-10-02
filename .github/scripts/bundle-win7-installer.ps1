@@ -9,7 +9,7 @@ $PSNativeCommandUseErrorActionPreference = $false
 $bundleDir = 'target/x86_64-win7-windows-msvc/release/bundle/nsis'
 
 for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-    pnpm tauri bundle --bundles nsis --target x86_64-win7-windows-msvc --config src-tauri/tauri.webview2-win7-fixed.conf.json
+    pnpm tauri bundle --bundles nsis --target x86_64-win7-windows-msvc --config src-tauri/tauri.webview2-win7-fixed.conf.json --config .github/fixtures/win7-nsis-zlib-config.json
     $bundleExitCode = $LASTEXITCODE
     if ($bundleExitCode -eq 0) { break }
     if ($attempt -eq $MaxAttempts) {
