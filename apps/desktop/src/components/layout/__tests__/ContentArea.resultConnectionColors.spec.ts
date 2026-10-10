@@ -21,7 +21,9 @@ import { useQueryStore } from "@/stores/queryStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 const cleanups: Array<() => void> = [];
-afterEach(() => {
+afterEach(async () => {
+  // Keep happy-dom alive until ContentArea's lazy child imports have settled.
+  await vi.dynamicImportSettled();
   cleanups.splice(0).forEach((cleanup) => cleanup());
   document.body.replaceChildren();
   window.localStorage?.clear();
