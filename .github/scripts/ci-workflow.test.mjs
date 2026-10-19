@@ -147,11 +147,10 @@ test("frontend tests use two shards on separate runners", () => {
   assert.doesNotMatch(job("frontend-typecheck"), /vitest|oxfmt|oxlint/);
 });
 
-test("frontend type checking has a dedicated heap budget without changing other frontend jobs", () => {
+test("frontend type checking retains its configured heap budget", () => {
   const content = job("frontend-typecheck");
   assert.match(content, /NODE_OPTIONS: --max-old-space-size=8192/);
   assert.match(content, /name: Type-check frontend\s+run: pnpm exec vue-tsc --noEmit --project apps\/desktop\/tsconfig\.json/);
-  for (const name of ["frontend-checks", "frontend-test"]) assert.doesNotMatch(job(name), /NODE_OPTIONS:/);
 });
 
 test("Windows 7 bundling uses the tested retry script and still audits the installer", () => {

@@ -260,8 +260,11 @@ describe("large result-set navigation", () => {
   });
 
   it("constrains width with shrink-0 max-w-[50%] when hasSiblingRunTabs is true", async () => {
-    const { container } = await mountNavigator(undefined, true, "tabs", 1, true);
+    const { container } = await mountNavigator(undefined, true, "tabs", 1, true, "#ef4444");
     const region = container.querySelector("[data-result-set-tabs-region]")!;
+    const markers = [...region.querySelectorAll<HTMLElement>("[data-result-connection-color]")];
+    expect(markers).toHaveLength(100);
+    expect(markers.every((marker) => marker.style.backgroundColor === "#ef4444")).toBe(true);
     expect(region.classList.contains("shrink-0")).toBe(true);
     expect(region.classList.contains("max-w-[50%]")).toBe(true);
     expect(region.classList.contains("flex-1")).toBe(false);
