@@ -1110,6 +1110,7 @@ export default {
     importNavicat: "Import Navicat NCX",
     importDbeaver: "Import DBeaver",
     importDatagrip: "Import DataGrip",
+    importRdm: "Import RedisDesktopManager",
     export: "Export Connections",
     collapseAll: "Collapse all",
     collapse: "Collapse sidebar",
