@@ -323,6 +323,25 @@ afterEach(() => {
 });
 
 describe("SqlFileExecutionDialog includes", () => {
+  it("shows included source paths in live statement progress and retained failure details", async () => {
+    await mountReadyDialog();
+    const gate = deferred();
+    mocks.executeSqlFiles.mockImplementationOnce(async (request: { executionId: string }) => {
+      mocks.progressHandler?.(progress(request.executionId, "running", { statementIndex: 1, statementSummary: "[shared/seed.sql] INSERT INTO missing VALUES(1)" }));
+      await gate.promise;
+      mocks.progressHandler?.(progress(request.executionId, "statementFailed", { statementIndex: 1, failureCount: 1, statementSummary: "[shared/seed.sql] INSERT INTO missing VALUES(1)", error: "[shared/seed.sql] no such table: missing" }));
+      mocks.progressHandler?.(progress(request.executionId, "done", { statementIndex: 1, failureCount: 1 }));
+    });
+    findButton("sqlFile.execute").click();
+    try {
+      await vi.waitFor(() => expect(root!.textContent).toContain("[shared/seed.sql] INSERT INTO missing"));
+    } finally {
+      gate.resolve();
+    }
+    await vi.waitFor(() => expect(root!.textContent).toContain("[shared/seed.sql] no such table: missing"));
+    expect(mocks.trackerTask.sqlFileFailures[0].statementSummary).toContain("[shared/seed.sql]");
+  });
+
   it("keeps includes opt-in and submits the checked option with the entry paths", async () => {
     await mountReadyDialog();
     const label = Array.from(root!.querySelectorAll("label")).find((item) => item.textContent?.includes("sqlFile.resolveIncludes"))!;

@@ -889,12 +889,13 @@ async fn execute_sql_file_paths_with_options(
     let prepared;
     let mut expanded_request;
     let expanded_paths;
-    let (request, file_paths) = if request.resolve_includes {
+    let (request, file_paths, sources) = if request.resolve_includes {
         let mut preparing =
             sql_file_progress(&request.execution_id, SqlFileStatus::Running, 0, 0, 0, 0, started_at, "", None);
         preparing.phase = Some(SqlFilePhase::Preparing);
         emit(preparing);
-        let result = async {
+        // Erase preparation's future type so external callers keep their default recursion limit.
+        let prepare: futures::future::BoxFuture<'_, Result<includes::PreparedSqlIncludes, String>> = Box::pin(async {
             if zip_package || request.selected_tables.is_some() {
                 return Err("SQL includes cannot be combined with ZIP packages or selected-table restore".to_string());
             }
@@ -914,14 +915,14 @@ async fn execute_sql_file_paths_with_options(
             includes::prepare_sql_file_includes(
                 file_paths,
                 request.encoding,
+                target.as_ref().map(|target| target.db_type),
                 options,
                 normalize_mysql_binary_literals,
                 &token,
             )
             .await
-        }
-        .await;
-        prepared = match result {
+        });
+        prepared = match prepare.await {
             Ok(prepared) => prepared,
             Err(error) => {
                 if token.is_cancelled() {
@@ -945,11 +946,12 @@ async fn execute_sql_file_paths_with_options(
         expanded_paths = prepared.paths.iter().map(|path| path.as_path()).collect::<Vec<_>>();
         expanded_request = request.clone();
         expanded_request.encoding = SqlFileEncoding::Utf8;
-        (&expanded_request, expanded_paths.as_slice())
+        (&expanded_request, expanded_paths.as_slice(), Some(&prepared))
     } else {
-        (request, file_paths)
+        (request, file_paths, None)
     };
-    with_sql_file_transaction(
+    let mut last_source = None;
+    let result = with_sql_file_transaction(
         state,
         request,
         &token,
@@ -960,10 +962,26 @@ async fn execute_sql_file_paths_with_options(
             token.clone(),
             started_at,
             zip_package,
-            emit,
+            |mut progress| {
+                if let Some(source) = sources.and_then(|sources| sources.source_for(&progress)) {
+                    let prefix = format!("[{source}] ");
+                    if !progress.statement_summary.is_empty() {
+                        progress.statement_summary.insert_str(0, &prefix);
+                    }
+                    if let Some(error) = progress.error.as_mut() {
+                        error.insert_str(0, &prefix);
+                    }
+                    last_source = Some(source.to_string());
+                }
+                emit(progress);
+            },
         )),
     )
-    .await
+    .await;
+    result.map_err(|error| match last_source {
+        Some(source) => format!("[{source}] {error}"),
+        None => error,
+    })
 }
 
 async fn execute_sql_file_paths_inner(
@@ -996,7 +1014,12 @@ async fn execute_sql_file_paths_inner(
         })
         .unwrap_or_default();
     let database_type = import_target.as_ref().map(|target| target.db_type);
-    let max_insert_batch_statements = sql_file_import_max_insert_batch_statements(zip_package, database_type);
+    // Included statements retain individual source/error boundaries, even across adjacent INSERTs.
+    let max_insert_batch_statements = if request.resolve_includes {
+        Some(1)
+    } else {
+        sql_file_import_max_insert_batch_statements(zip_package, database_type)
+    };
     let mut progress = SqlFileExecutionProgress::new();
     // Validate the entire dump before any SQL reaches the database. This also
     // identifies view placeholders whose final CREATE VIEW appears later.
@@ -2010,6 +2033,24 @@ impl StreamingSqlFileSplitter {
         self.0.push_chunk(chunk)
     }
 
+    fn can_start_file_directive(&self) -> bool {
+        match &self.0 {
+            StreamingSqlFileSplitterKind::Statements(splitter) => splitter.can_start_file_directive(),
+            StreamingSqlFileSplitterKind::SqlServerBatches(splitter) => {
+                matches!(splitter.lexical_state, SqlServerLexicalState::Normal)
+                    && splitter.partial_line.trim().is_empty()
+            }
+        }
+    }
+
+    fn is_at_file_directive_boundary(&self) -> bool {
+        self.can_start_file_directive()
+            && match &self.0 {
+                StreamingSqlFileSplitterKind::Statements(splitter) => splitter.is_at_file_directive_boundary(),
+                StreamingSqlFileSplitterKind::SqlServerBatches(splitter) => !splitter.batch_has_sql,
+            }
+    }
+
     pub(crate) fn finish(self) -> Vec<SqlStatementWithControl> {
         self.0.finish()
     }
@@ -2050,6 +2091,7 @@ struct SqlServerBatchSplitter {
     partial_line: String,
     lexical_state: SqlServerLexicalState,
     flush_semicolons: bool,
+    batch_has_sql: bool,
 }
 
 impl Default for SqlServerBatchSplitter {
@@ -2076,6 +2118,7 @@ impl SqlServerBatchSplitter {
             partial_line: String::new(),
             lexical_state: SqlServerLexicalState::default(),
             flush_semicolons,
+            batch_has_sql: false,
         }
     }
 
@@ -2107,6 +2150,13 @@ impl SqlServerBatchSplitter {
         }
         let mut chars = line.chars().peekable();
         while let Some(ch) = chars.next() {
+            if matches!(self.lexical_state, SqlServerLexicalState::Normal)
+                && !ch.is_whitespace()
+                && !(ch == '-' && chars.peek() == Some(&'-'))
+                && !(ch == '/' && chars.peek() == Some(&'*'))
+            {
+                self.batch_has_sql = true;
+            }
             self.batch.push(ch);
             match self.lexical_state {
                 SqlServerLexicalState::Normal => match ch {
@@ -2166,6 +2216,7 @@ impl SqlServerBatchSplitter {
             batches.push(batch.to_string());
         }
         self.batch.clear();
+        self.batch_has_sql = false;
         self.lexical_state = SqlServerLexicalState::Normal;
     }
 }

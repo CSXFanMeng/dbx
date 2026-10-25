@@ -4138,7 +4138,7 @@ fn has_executable_sql_with_options(statement: &str, options: SqlParsingOptions) 
             continue;
         }
 
-        if ch == '-' && next == Some('-') {
+        if ch == '-' && next == Some('-') && dash_dash_starts_line_comment(options.profile, chars.get(i + 2).copied()) {
             in_line_comment = true;
             previous = Some(ch);
             i += 1;
@@ -4198,6 +4198,20 @@ mod tests {
         starts_with_executable_sql_keyword_for_database, starts_with_oracle_style_routine_body, SqlDialectProfile,
         SqlFileRequest, SqlFileStatementAction, SqlParsingOptions, SqlStatementSplitter,
     };
+
+    #[test]
+    fn file_directive_boundaries_use_the_dialect_line_comment_rule() {
+        let mut mysql = SqlStatementSplitter::with_options(SqlParsingOptions::for_database_type(DatabaseType::Mysql));
+        mysql.push_chunk("--foo\n");
+        assert!(!mysql.is_at_file_directive_boundary());
+        let mut sqlite = SqlStatementSplitter::with_options(SqlParsingOptions::for_database_type(DatabaseType::Sqlite));
+        sqlite.push_chunk("--foo\n");
+        assert!(sqlite.is_at_file_directive_boundary());
+        let mut mysql_comment =
+            SqlStatementSplitter::with_options(SqlParsingOptions::for_database_type(DatabaseType::Mysql));
+        mysql_comment.push_chunk("-- real comment\n");
+        assert!(mysql_comment.is_at_file_directive_boundary());
+    }
 
     #[test]
     fn sql_file_request_keeps_failure_logging_on_when_the_field_is_absent() {

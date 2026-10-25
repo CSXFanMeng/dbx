@@ -3,7 +3,9 @@ use std::path::{Component, Path, PathBuf};
 use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 
-use super::{SqlFileEncoding, SqlFileStreamDecoder, SqlParsingOptions, SqlStatementSplitter};
+use super::{
+    DatabaseType, SqlFileEncoding, SqlFileProgress, SqlFileStreamDecoder, SqlParsingOptions, StreamingSqlFileSplitter,
+};
 
 const MAX_DEPTH: usize = 16;
 const MAX_FILES: usize = 256;
@@ -14,6 +16,26 @@ pub(super) struct PreparedSqlIncludes {
     // Keep the private expanded scripts alive until execution has finished.
     _directory: tempfile::TempDir,
     pub paths: Vec<PathBuf>,
+    sources: Vec<SourceSpan>,
+}
+
+struct SourceSpan {
+    first: usize,
+    last: usize,
+    source: String,
+}
+
+impl PreparedSqlIncludes {
+    pub(super) fn source_for(&self, progress: &SqlFileProgress) -> Option<&str> {
+        if progress.file_index.is_some()
+            || progress.statement_index == 0
+            || (progress.statement_summary.is_empty() && progress.error.is_none())
+        {
+            return None;
+        }
+        let index = self.sources.partition_point(|span| span.last < progress.statement_index);
+        self.sources.get(index).filter(|span| span.first <= progress.statement_index).map(|span| span.source.as_str())
+    }
 }
 
 struct Expansion<'a> {
@@ -24,7 +46,9 @@ struct Expansion<'a> {
     encoding: SqlFileEncoding,
     normalize_mysql_binary_literals: bool,
     token: &'a CancellationToken,
-    splitter: SqlStatementSplitter,
+    splitter: StreamingSqlFileSplitter,
+    statement_count: usize,
+    sources: Vec<SourceSpan>,
 }
 
 fn directive(line: &str) -> Result<Option<&str>, String> {
@@ -47,12 +71,38 @@ fn directive(line: &str) -> Result<Option<&str>, String> {
 }
 
 impl Expansion<'_> {
+    fn record_statements(&mut self, count: usize) {
+        if count == 0 {
+            return;
+        }
+        let source = self
+            .active
+            .last()
+            .expect("SQL text is written from an active source file")
+            .strip_prefix(&self.root)
+            .expect("source is confined to the root")
+            .to_string_lossy()
+            .replace('\\', "/")
+            .chars()
+            .map(|ch| if ch.is_control() { '\u{fffd}' } else { ch })
+            .collect::<String>();
+        let first = self.statement_count + 1;
+        self.statement_count += count;
+        // Store ranges per file visit, not an unbounded filename per SQL statement.
+        if let Some(previous) = self.sources.last_mut().filter(|span| span.source == source && span.last + 1 == first) {
+            previous.last = self.statement_count;
+        } else {
+            self.sources.push(SourceSpan { first, last: self.statement_count, source });
+        }
+    }
+
     async fn write(&mut self, output: &mut tokio::fs::File, text: &str) -> Result<(), String> {
         self.bytes = self.bytes.saturating_add(text.len() as u64);
         if self.bytes > MAX_BYTES {
             return Err("SQL includes exceed the 1 GiB expanded size limit".to_string());
         }
-        self.splitter.push_chunk(text);
+        let count = self.splitter.push_chunk(text).len();
+        self.record_statements(count);
         output.write_all(text.as_bytes()).await.map_err(|error| error.to_string())
     }
 
@@ -160,6 +210,7 @@ impl Expansion<'_> {
 pub(super) async fn prepare_sql_file_includes(
     paths: &[&Path],
     encoding: SqlFileEncoding,
+    database_type: Option<DatabaseType>,
     options: SqlParsingOptions,
     normalize_mysql_binary_literals: bool,
     token: &CancellationToken,
@@ -172,6 +223,8 @@ pub(super) async fn prepare_sql_file_includes(
     let mut expanded = Vec::new();
     let mut total_bytes: u64 = 0;
     let mut total_files = 0;
+    let mut total_statements = 0;
+    let mut sources = Vec::new();
     for (index, path) in paths.iter().enumerate() {
         if !path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("sql")) {
             return Err("SQL includes require uncompressed .sql entry files".to_string());
@@ -189,15 +242,23 @@ pub(super) async fn prepare_sql_file_includes(
             encoding,
             normalize_mysql_binary_literals,
             token,
-            splitter: SqlStatementSplitter::with_options(options),
+            splitter: StreamingSqlFileSplitter::new(database_type, options, false),
+            statement_count: total_statements,
+            sources: Vec::new(),
         };
         expansion.file(&source, &mut output).await?;
+        expansion.active.push(source.clone());
+        let splitter =
+            std::mem::replace(&mut expansion.splitter, StreamingSqlFileSplitter::new(database_type, options, false));
+        expansion.record_statements(splitter.finish().len());
         output.flush().await.map_err(|error| error.to_string())?;
         total_bytes = expansion.bytes;
         total_files = expansion.files;
+        total_statements = expansion.statement_count;
+        sources.extend(expansion.sources);
         expanded.push(target);
     }
-    Ok(PreparedSqlIncludes { _directory: directory, paths: expanded })
+    Ok(PreparedSqlIncludes { _directory: directory, paths: expanded, sources })
 }
 
 #[cfg(test)]
@@ -260,6 +321,12 @@ mod tests {
             .await;
             assert_eq!(result.is_err(), expected == SqlFileStatus::Error, "{result:?}");
             assert_eq!(events.last().unwrap().status, expected);
+            if script.contains("failure.sql") {
+                let failure = events.iter().find(|event| event.status == SqlFileStatus::StatementFailed).unwrap();
+                assert!(failure.statement_summary.starts_with("[failure.sql] "), "{failure:?}");
+                assert!(failure.error.as_deref().unwrap().starts_with("[failure.sql] "));
+                if let Err(error) = &result { assert!(error.starts_with("[failure.sql] "), "{error}"); }
+            }
             if continues && script.contains("failure.sql") {
                 assert_eq!(events.last().unwrap().failure_count, 1, "{events:?}");
                 assert_eq!(events.last().unwrap().success_count, 1, "{events:?}");
@@ -273,11 +340,94 @@ mod tests {
         prepare_sql_file_includes(
             &[path],
             SqlFileEncoding::Auto,
+            Some(DatabaseType::Sqlite),
             SqlParsingOptions::for_database_type_and_compatibility(DatabaseType::Sqlite, None),
             false,
             &CancellationToken::new(),
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn sqlserver_includes_share_go_batch_boundaries_and_source_order() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("shared")).unwrap();
+        let root = dir.path().join("main.sql");
+        std::fs::write(&root, "SELECT 0;\nGO\n-- @include shared/seed.sql\nSELECT 2;\nGO\n").unwrap();
+        std::fs::write(dir.path().join("shared/seed.sql"), "SELECT '-- @include absent.sql';\nGO").unwrap();
+        let options = SqlParsingOptions::for_database_type_and_compatibility(DatabaseType::SqlServer, None);
+        let result = prepare_sql_file_includes(
+            &[&root],
+            SqlFileEncoding::Auto,
+            Some(DatabaseType::SqlServer),
+            options,
+            false,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        let expanded = std::fs::read_to_string(&result.paths[0]).unwrap();
+        let mut splitter = StreamingSqlFileSplitter::new(Some(DatabaseType::SqlServer), options, false);
+        let mut statements = splitter.push_chunk(&expanded);
+        statements.extend(splitter.finish());
+        assert_eq!(statements.len(), 3);
+        assert!(statements[0].sql.contains("SELECT 0"));
+        assert!(statements[1].sql.contains("absent.sql"));
+        assert!(statements[2].sql.contains("SELECT 2"));
+        assert_eq!(
+            result.sources.iter().map(|span| span.source.as_str()).collect::<Vec<_>>(),
+            ["main.sql", "shared/seed.sql", "main.sql"]
+        );
+    }
+
+    #[tokio::test]
+    async fn mysql_non_comment_dashes_cannot_hide_pending_sql_before_include() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("main.sql");
+        std::fs::write(&root, "--foo\n-- @include absent.sql\n").unwrap();
+        let options = SqlParsingOptions::for_database_type_and_compatibility(DatabaseType::Mysql, None);
+        let error = prepare_sql_file_includes(
+            &[&root],
+            SqlFileEncoding::Auto,
+            Some(DatabaseType::Mysql),
+            options,
+            true,
+            &CancellationToken::new(),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(error.contains("between complete statements"), "{error}");
+        std::fs::write(&root, "-- real comment\n-- @include child.sql\n").unwrap();
+        std::fs::write(dir.path().join("child.sql"), "SELECT 1;\n").unwrap();
+        assert!(prepare_sql_file_includes(
+            &[&root],
+            SqlFileEncoding::Auto,
+            Some(DatabaseType::Mysql),
+            options,
+            true,
+            &CancellationToken::new()
+        )
+        .await
+        .is_ok());
+    }
+
+    #[tokio::test]
+    async fn provenance_ranges_stay_bounded_and_distinguish_repeated_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("main.sql");
+        std::fs::write(
+            &root,
+            format!("{}-- @include child.sql\n{}", "SELECT 1;\n".repeat(1000), "SELECT 3;\n".repeat(1000)),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("child.sql"), "SELECT 2;\n".repeat(1000)).unwrap();
+        let result = expand(&root).await.unwrap();
+        assert_eq!(result.sources.len(), 3);
+        assert_eq!((result.sources[0].first, result.sources[0].last), (1, 1000));
+        assert_eq!((result.sources[1].first, result.sources[1].last), (1001, 2000));
+        assert_eq!((result.sources[2].first, result.sources[2].last), (2001, 3000));
+        assert_eq!(result.sources[1].source, "child.sql");
     }
 
     #[tokio::test]
@@ -377,6 +527,7 @@ mod tests {
         assert!(prepare_sql_file_includes(
             &[&root],
             SqlFileEncoding::Auto,
+            Some(DatabaseType::Sqlite),
             SqlParsingOptions::default(),
             false,
             &token
@@ -396,6 +547,7 @@ mod tests {
         let result = prepare_sql_file_includes(
             &[&root],
             SqlFileEncoding::Utf8,
+            Some(DatabaseType::Mysql),
             SqlParsingOptions::for_database_type_and_compatibility(DatabaseType::Mysql, None),
             true,
             &CancellationToken::new(),
