@@ -32,6 +32,7 @@ use crate::sql::{
 };
 use crate::types::QueryResult;
 
+mod includes;
 mod table_restore;
 pub use table_restore::SqlFileTable;
 use table_restore::TableRestoreFilter;
@@ -734,8 +735,13 @@ pub async fn execute_sql_file_content(
     file_content: &str,
     token: CancellationToken,
     started_at: Instant,
-    emit: impl FnMut(SqlFileProgress),
+    mut emit: impl FnMut(SqlFileProgress),
 ) -> Result<(), String> {
+    if request.resolve_includes {
+        let error = "SQL includes require local .sql file execution, not inline content".to_string();
+        emit(sql_file_error_progress(&request.execution_id, started_at, error.clone()));
+        return Err(error);
+    }
     with_sql_file_transaction(
         state,
         request,
@@ -878,8 +884,71 @@ async fn execute_sql_file_paths_with_options(
     token: CancellationToken,
     started_at: Instant,
     zip_package: bool,
-    emit: impl FnMut(SqlFileProgress),
+    mut emit: impl FnMut(SqlFileProgress),
 ) -> Result<(), String> {
+    let prepared;
+    let mut expanded_request;
+    let expanded_paths;
+    let (request, file_paths) = if request.resolve_includes {
+        let mut preparing =
+            sql_file_progress(&request.execution_id, SqlFileStatus::Running, 0, 0, 0, 0, started_at, "", None);
+        preparing.phase = Some(SqlFilePhase::Preparing);
+        emit(preparing);
+        let result = async {
+            if zip_package || request.selected_tables.is_some() {
+                return Err("SQL includes cannot be combined with ZIP packages or selected-table restore".to_string());
+            }
+            let target = sql_file_import_target(state, &request.connection_id, &request.database).await;
+            let options = target
+                .as_ref()
+                .map(|target| {
+                    SqlParsingOptions::for_database_type_and_compatibility(
+                        target.db_type,
+                        target.compatibility_mode.as_mode_str(),
+                    )
+                })
+                .unwrap_or_default();
+            let normalize_mysql_binary_literals = target.as_ref().is_some_and(|target| {
+                crate::sql::is_mysql_compatible_import_target(&target.db_type, target.driver_profile.as_deref())
+            });
+            includes::prepare_sql_file_includes(
+                file_paths,
+                request.encoding,
+                options,
+                normalize_mysql_binary_literals,
+                &token,
+            )
+            .await
+        }
+        .await;
+        prepared = match result {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                if token.is_cancelled() {
+                    emit(sql_file_progress(
+                        &request.execution_id,
+                        SqlFileStatus::Cancelled,
+                        0,
+                        0,
+                        0,
+                        0,
+                        started_at,
+                        "",
+                        None,
+                    ));
+                    return Ok(());
+                }
+                emit(sql_file_error_progress(&request.execution_id, started_at, error.clone()));
+                return Err(error);
+            }
+        };
+        expanded_paths = prepared.paths.iter().map(|path| path.as_path()).collect::<Vec<_>>();
+        expanded_request = request.clone();
+        expanded_request.encoding = SqlFileEncoding::Utf8;
+        (&expanded_request, expanded_paths.as_slice())
+    } else {
+        (request, file_paths)
+    };
     with_sql_file_transaction(
         state,
         request,
@@ -3066,6 +3135,7 @@ mod tests {
             part_cooldown_ms: 0,
             skip_relational_constraints: false,
             failure_log_enabled: true,
+            resolve_includes: false,
             encoding: Default::default(),
         };
         // Non-MySQL auto-commit files must keep BEGIN/COMMIT on one connection.
@@ -3094,6 +3164,7 @@ mod tests {
             part_cooldown_ms: 0,
             skip_relational_constraints: false,
             failure_log_enabled: true,
+            resolve_includes: false,
             encoding: Default::default(),
         };
         let mut events = Vec::new();
@@ -3450,6 +3521,7 @@ mod tests {
                 part_cooldown_ms: 0,
                 skip_relational_constraints: false,
                 failure_log_enabled: true,
+                resolve_includes: false,
                 encoding: Default::default(),
             };
             let token = CancellationToken::new();
@@ -4119,6 +4191,7 @@ mod tests {
             part_cooldown_ms: 0,
             skip_relational_constraints: false,
             failure_log_enabled: true,
+            resolve_includes: false,
             encoding: Default::default(),
         };
         let mut progress = Vec::new();

@@ -91,6 +91,9 @@ pub struct SqlFileRequest {
     /// BOM/UTF-8/GBK detection behavior.
     #[serde(default)]
     pub encoding: SqlFileEncoding,
+    /// Explicitly allow desktop scripts to include SQL below the entry file's directory.
+    #[serde(default)]
+    pub resolve_includes: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -714,6 +717,22 @@ pub struct SqlStatementWithControl {
 impl SqlStatementSplitter {
     pub fn with_options(options: SqlParsingOptions) -> Self {
         Self { options, ..Self::default() }
+    }
+
+    /// A whole-line file directive must not be interpreted inside SQL text.
+    pub fn can_start_file_directive(&self) -> bool {
+        !self.in_single_quote
+            && !self.in_double_quote
+            && !self.in_backtick
+            && !self.in_line_comment
+            && self.block_comment_depth == 0
+            && self.dollar_quote_tag.is_none()
+            && !self.oracle_q_quote.is_open()
+            && self.pending_psql_command.is_none()
+    }
+
+    pub fn is_at_file_directive_boundary(&self) -> bool {
+        self.can_start_file_directive() && !has_executable_sql_with_options(&self.buffer, self.options)
     }
 
     pub fn push_chunk(&mut self, chunk: &str) -> Vec<String> {
